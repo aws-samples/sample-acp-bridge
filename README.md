@@ -50,7 +50,18 @@ acp-bridge/
 - [uv](https://docs.astral.sh/uv/) 包管理器
 - 已安装并登录的 CLI agent（如 `kiro-cli`、`claude`）
 
-## 搭建步骤
+## 快速开始
+
+```bash
+git clone https://github.com/xiwan/acp-bridge.git
+cd acp-bridge
+cp config.yaml.example config.yaml
+# 编辑 config.yaml，填入你的 auth_token 和 allowed_ips
+uv sync
+uv run main.py
+```
+
+## 从零搭建
 
 ### 1. 初始化项目
 
