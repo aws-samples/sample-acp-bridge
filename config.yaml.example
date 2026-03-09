@@ -1,0 +1,29 @@
+server:
+  host: "0.0.0.0"
+  port: 8001
+  session_ttl_hours: 24
+
+security:
+  auth_token: "<your-token>"
+  allowed_ips:
+    - "127.0.0.1"
+    # - "<client-ip>"
+
+agents:
+  kiro:
+    enabled: true
+    command: "kiro-cli"
+    args: ["chat", "--no-interactive", "--trust-all-tools", "--wrap", "never"]
+    resume_flag: "--resume"
+    output_mode: "kiro"
+    description: "Kiro CLI agent"
+    session_base: "/tmp/acp-bridge-sessions"
+  claude:
+    enabled: true
+    command: "claude"
+    args: ["-p", "--output-format", "text", "--dangerously-skip-permissions"]
+    resume_flag: "--resume"
+    supports_resume: false
+    output_mode: "raw"
+    description: "Claude Code agent"
+    session_base: "/tmp/acp-bridge-sessions"
