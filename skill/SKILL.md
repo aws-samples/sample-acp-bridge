@@ -5,7 +5,7 @@ description: "v0.3.0 — Call remote CLI agents via ACP Bridge HTTP API. Usage: 
 
 # ACP Bridge Caller — Invoke Remote CLI Agents
 
-Call remote CLI agents (Kiro CLI, Claude Code, etc.) via the ACP Bridge HTTP API and retrieve results.
+Call remote CLI agents (Kiro CLI, Claude Code, etc.) via the [ACP Bridge](https://github.com/xiwan/acp-bridge/) HTTP API and retrieve results.
 
 ## Trigger Commands
 
