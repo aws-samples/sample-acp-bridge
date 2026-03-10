@@ -3,6 +3,7 @@
 # 用法:
 #   acp-client.sh <prompt>                    # 同步调用
 #   acp-client.sh --stream <prompt>           # 流式调用（SSE）
+#   acp-client.sh --card <prompt>             # 输出 Markdown 卡片（适合 IM 展示）
 #   acp-client.sh -s <uuid> <prompt>          # 指定 session_id
 #   acp-client.sh -a <agent> <prompt>         # 指定 agent
 #   acp-client.sh -l                          # 列出可用 agents
@@ -24,6 +25,7 @@ TOKEN="${ACP_TOKEN:-}"
 SESSION=""
 LIST=false
 STREAM=false
+CARD=false
 MAX_RETRIES="${ACP_RETRIES:-2}"
 CONNECT_TIMEOUT=10
 SYNC_TIMEOUT="${ACP_TIMEOUT:-300}"
@@ -37,8 +39,9 @@ while [[ $# -gt 0 ]]; do
         -t|--token)   TOKEN="$2"; shift 2 ;;
         -l|--list)    LIST=true; shift ;;
         --stream)     STREAM=true; shift ;;
+        --card)       CARD=true; shift ;;
         --retries)    MAX_RETRIES="$2"; shift 2 ;;
-        -h|--help)    sed -n '2,16s/^# //p' "$0"; exit 0 ;;
+        -h|--help)    sed -n '2,17s/^# //p' "$0"; exit 0 ;;
         *) break ;;
     esac
 done
@@ -64,6 +67,8 @@ PROMPT="$*"
 # --- 构建 JSON payload ---
 MODE="sync"
 $STREAM && MODE="stream"
+# card 模式强制用 stream 获取结构化事件
+$CARD && MODE="stream"
 
 PAYLOAD=$(jq -n \
     --arg agent "$AGENT" \
@@ -76,7 +81,7 @@ PAYLOAD=$(jq -n \
 
 # --- 带重试的调用 ---
 call_api() {
-    if $STREAM; then
+    if [[ "$MODE" == "stream" ]]; then
         curl -sN --connect-timeout "$CONNECT_TIMEOUT" \
             -X POST "${AUTH[@]}" "$URL/runs" \
             -H "Content-Type: application/json" \
@@ -105,6 +110,88 @@ retry() {
         sleep $((attempt * 2))
     done
 }
+
+# --- Card 模式：收集所有事件，最后输出 Markdown 卡片 ---
+if $CARD; then
+    TMPDIR_CARD=$(mktemp -d)
+    trap 'rm -rf "$TMPDIR_CARD"' EXIT
+    : > "$TMPDIR_CARD/thoughts"
+    : > "$TMPDIR_CARD/tools"
+    : > "$TMPDIR_CARD/content"
+    ERROR=""
+
+    retry | while IFS= read -t "$IDLE_TIMEOUT" -r line; do
+        [[ "$line" != data:* ]] && continue
+        data="${line#data: }"
+        type=$(echo "$data" | jq -r '.type // empty' 2>/dev/null) || continue
+        case "$type" in
+            message.part)
+                content=$(echo "$data" | jq -r '.part.content // empty')
+                name=$(echo "$data" | jq -r '.part.name // empty')
+                if [[ "$name" == "thought" && -n "$content" ]]; then
+                    printf '%s' "$content" >> "$TMPDIR_CARD/thoughts"
+                elif [[ -n "$content" ]]; then
+                    # 过滤 tool 事件文本，单独收集
+                    if [[ "$content" == "[tool.start]"* ]]; then
+                        :  # skip inline tool start
+                    elif [[ "$content" == "[tool.done]"* ]]; then
+                        # 提取 tool 名称
+                        title=$(echo "$content" | sed 's/\[tool\.done\] \(.*\) (.*/\1/')
+                        echo "✅ \`$title\`" >> "$TMPDIR_CARD/tools"
+                    elif [[ "$content" == "[status]"* ]]; then
+                        :  # skip status lines
+                    else
+                        printf '%s' "$content" >> "$TMPDIR_CARD/content"
+                    fi
+                fi
+                ;;
+            run.failed)
+                msg=$(echo "$data" | jq -r '(.run.error.code // "error") + ": " + (.run.error.message // "未知错误")')
+                echo "$msg" > "$TMPDIR_CARD/error"
+                ;;
+        esac
+    done
+
+    # 组装 Markdown 卡片
+    echo "**🤖 ${AGENT}**"
+    echo ""
+
+    # 错误
+    if [[ -s "$TMPDIR_CARD/error" ]]; then
+        echo "❌ $(cat "$TMPDIR_CARD/error")"
+        exit 1
+    fi
+
+    # Thinking（折叠）
+    if [[ -s "$TMPDIR_CARD/thoughts" ]]; then
+        echo "<details>"
+        echo "<summary>💭 Thinking</summary>"
+        echo ""
+        cat "$TMPDIR_CARD/thoughts"
+        echo ""
+        echo "</details>"
+        echo ""
+    fi
+
+    # Tools（已完成的工具调用）
+    if [[ -s "$TMPDIR_CARD/tools" ]]; then
+        echo "🔧 **Tools**"
+        cat "$TMPDIR_CARD/tools"
+        echo ""
+    fi
+
+    # 正文
+    if [[ -s "$TMPDIR_CARD/content" ]]; then
+        cat "$TMPDIR_CARD/content"
+    else
+        echo "(empty response)"
+    fi
+
+    echo ""
+    echo "---"
+    echo "_session: \`${SESSION:0:8}…\`_"
+    exit 0
+fi
 
 # --- 流式模式 ---
 if $STREAM; then

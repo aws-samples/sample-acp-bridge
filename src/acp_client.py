@@ -81,6 +81,15 @@ class AcpConnection:
                 if msg_id is not None and msg_id in self._pending:
                     self._pending.pop(msg_id).set_result(msg)
                 else:
+                    # Auto-reply permission requests (e.g. claude-agent-acp)
+                    if msg.get("method") == "session/request_permission" and msg_id is not None:
+                        log.info("auto-allow permission: %s",
+                                 msg.get("params", {}).get("toolCall", {}).get("title", "?"))
+                        reply = {"jsonrpc": "2.0", "id": msg_id,
+                                 "result": {"optionId": "allow_always"}}
+                        data = json.dumps(reply) + "\n"
+                        self.proc.stdin.write(data.encode())
+                        asyncio.ensure_future(self.proc.stdin.drain())
                     for q in self._notification_queues.values():
                         q.put_nowait(msg)
         except Exception as e:
