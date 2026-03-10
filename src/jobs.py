@@ -113,15 +113,13 @@ class JobManager:
         is_discord = "discord.com/api/webhooks" in url
 
         if is_discord:
-            payload = self._format_discord(job)
+            payloads = [self._format_discord(job)]
         else:
-            # OpenClaw /tools/invoke format
-            payload = self._format_openclaw(job)
+            payloads = self._format_openclaw(job)
 
         headers = {"Content-Type": "application/json"}
         if self._webhook_token:
             headers["Authorization"] = f"Bearer {self._webhook_token}"
-        # OpenClaw gateway needs account context from the job
         if not is_discord:
             account_id = job.callback_meta.get("account_id", "")
             if account_id:
@@ -130,53 +128,78 @@ class JobManager:
 
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(url, json=payload, headers=headers)
-                log.info("webhook_sent: job=%s target=%s status=%d",
-                         job.job_id, "discord" if is_discord else "openclaw", resp.status_code)
-                if resp.status_code == 200:
+                for payload in payloads:
+                    resp = await client.post(url, json=payload, headers=headers)
+                    log.info("webhook_sent: job=%s target=%s status=%d part=%d/%d",
+                             job.job_id, "discord" if is_discord else "openclaw",
+                             resp.status_code, payloads.index(payload) + 1, len(payloads))
+                    if resp.status_code != 200:
+                        break
+                else:
                     job.webhook_sent = True
         except Exception as e:
             log.error("webhook_failed: job=%s error=%s", job.job_id, e)
 
     @staticmethod
-    def _format_openclaw(job: Job) -> dict:
-        """Format as OpenClaw /tools/invoke payload."""
+    def _split_message(text: str, limit: int = 1900) -> list[str]:
+        """Split text into chunks at line boundaries, each <= limit chars."""
+        chunks, current = [], ""
+        for line in text.split("\n"):
+            # +1 for the newline character
+            if current and len(current) + len(line) + 1 > limit:
+                chunks.append(current)
+                current = line
+            else:
+                current = f"{current}\n{line}" if current else line
+        if current:
+            chunks.append(current)
+        return chunks
+
+    @staticmethod
+    def _format_openclaw(job: Job) -> list[dict]:
+        """Format as OpenClaw /tools/invoke payloads, split for Discord 2000-char limit."""
         target = job.callback_meta.get("discord_target", "")
         if not target:
-            return {**job.to_dict(), **job.callback_meta}
+            return [{**job.to_dict(), **job.callback_meta}]
 
         duration = round(job.completed_at - job.created_at, 1)
-        lines = [
-            f"📨 **ACP Bridge** — {job.agent} `{job.job_id}`",
-            ">",
-        ]
+        header = f"📨 **ACP Bridge** — {job.agent} `{job.job_id}`\n>"
 
         if job.status == "failed":
-            lines.append(f"> ❌ {job.error}")
+            body = f"> ❌ {job.error}"
         else:
+            lines = []
             if job.tools:
                 for t in job.tools[:10]:
                     lines.append(f"> 🔧 `{t}`")
                 lines.append(">")
-            for l in job.result[:3800].split("\n"):
+            for l in job.result.split("\n"):
                 lines.append(f"> {l}")
-            if len(job.result) > 3800:
-                lines.append("> _(truncated)_")
+            body = "\n".join(lines)
 
-        lines.extend([
-            ">",
-            f"📨 **Done** — {duration}s",
-        ])
+        footer = f">\n📨 **Done** — {duration}s"
 
-        return {
-            "tool": "message",
-            "action": "send",
-            "args": {
-                "channel": "discord",
-                "target": target,
-                "message": "\n".join(lines),
-            },
-        }
+        # Split body into chunks that fit within Discord limit
+        # Reserve space for header (first chunk) and footer (last chunk)
+        chunks = JobManager._split_message(body, limit=1900)
+        total = len(chunks)
+        payloads = []
+        for i, chunk in enumerate(chunks):
+            parts = []
+            if i == 0:
+                parts.append(header)
+            if total > 1:
+                parts.append(f"> **[{i+1}/{total}]**")
+            parts.append(chunk)
+            if i == total - 1:
+                parts.append(footer)
+            msg = "\n".join(parts)
+            payloads.append({
+                "tool": "message",
+                "action": "send",
+                "args": {"channel": "discord", "target": target, "message": msg},
+            })
+        return payloads
 
     @staticmethod
     def _format_discord(job: Job) -> dict:
