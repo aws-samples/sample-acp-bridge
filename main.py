@@ -1,17 +1,20 @@
+"""ACP Bridge — remote CLI agent gateway."""
+
 import argparse
 import asyncio
 import logging
-import shutil
+import os
+import re
 import sys
 import time
-from pathlib import Path
 
 import uvicorn
 import yaml
 from acp_sdk.server import Server
 from acp_sdk.server.app import create_app
 
-from src.agents import make_agent_handler
+from src.acp_client import AcpProcessPool
+from src.agents import make_acp_agent_handler, make_pty_agent_handler
 from src.security import SecurityMiddleware
 
 log = logging.getLogger("acp-bridge")
@@ -19,15 +22,19 @@ log = logging.getLogger("acp-bridge")
 
 def setup_logging(verbose: bool):
     level = logging.DEBUG if verbose else logging.INFO
-    fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    logging.basicConfig(level=level, format=fmt)
+    logging.basicConfig(
+        level=level,
+        format='{"ts":"%(asctime)s","level":"%(levelname)s","logger":"%(name)s","msg":"%(message)s"}',
+    )
     if not verbose:
         logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 
-def load_config(path: str = "config.yaml") -> dict:
+def load_config(path: str) -> dict:
     with open(path) as f:
-        return yaml.safe_load(f)
+        raw = f.read()
+    raw = re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), ""), raw)
+    return yaml.safe_load(raw)
 
 
 def main():
@@ -35,60 +42,103 @@ def main():
     parser.add_argument("--host", help="Override listen host")
     parser.add_argument("--port", type=int, help="Override listen port")
     parser.add_argument("--config", default="config.yaml", help="Config file path")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose/debug logging")
+    parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
     setup_logging(args.verbose)
-
     config = load_config(args.config)
-    log.debug("Loaded config from %s", args.config)
 
-    agents = {k: v for k, v in config.get("agents", {}).items() if v.get("enabled")}
-    if not agents:
-        log.error("No enabled agents in config. Check config.yaml")
+    agents_cfg = {k: v for k, v in config.get("agents", {}).items() if v.get("enabled")}
+    if not agents_cfg:
+        log.error("No enabled agents in config")
         sys.exit(1)
 
-    server = Server()
-    for name, cfg in agents.items():
-        handler = make_agent_handler(cfg, verbose=args.verbose)
-        server.agent(name=name, description=cfg.get("description", ""))(handler)
-        log.info("✅ Registered agent: %s  cmd=%s output_mode=%s", name, cfg["command"], cfg.get("output_mode", "raw"))
+    # Pool for ACP mode agents
+    pool_cfg = config.get("pool", {})
+    acp_agents = {k: v for k, v in agents_cfg.items() if v.get("mode") == "acp"}
+    pool = AcpProcessPool(
+        agents_config=acp_agents,
+        max_processes=pool_cfg.get("max_processes", 20),
+        max_per_agent=pool_cfg.get("max_per_agent", 10),
+        verbose=args.verbose,
+    ) if acp_agents else None
 
-    allowed_ips = config.get("security", {}).get("allowed_ips", [])
-    auth_token = config.get("security", {}).get("auth_token", "")
+    # Register agents
+    server = Server()
+    for name, cfg in agents_cfg.items():
+        mode = cfg.get("mode", "pty")
+        if mode == "acp" and pool:
+            handler = make_acp_agent_handler(name, pool)
+        else:
+            handler = make_pty_agent_handler(cfg, verbose=args.verbose)
+        server.agent(name=name, description=cfg.get("description", ""))(handler)
+        log.info("registered: agent=%s mode=%s cmd=%s", name, mode, cfg.get("command"))
+
+    # Security
+    sec_cfg = config.get("security", {})
+    allowed_ips = sec_cfg.get("allowed_ips", [])
+    auth_token = sec_cfg.get("auth_token", "")
+
+    # Server config
     srv_cfg = config.get("server", {})
     host = args.host or srv_cfg.get("host", "0.0.0.0")
     port = args.port or srv_cfg.get("port", 8001)
+    ttl_hours = srv_cfg.get("session_ttl_hours", 24)
+    shutdown_timeout = srv_cfg.get("shutdown_timeout", 30)
 
     app = create_app(*server.agents)
     app.add_middleware(SecurityMiddleware, allowed_ips=allowed_ips, auth_token=auth_token)
 
-    # Session cleanup task
-    ttl_hours = srv_cfg.get("session_ttl_hours", 24)
-    session_bases = {cfg.get("session_base", "/tmp/acp-bridge-sessions") for cfg in agents.values()}
+    from fastapi import Path as PathParam
 
-    async def cleanup_sessions():
+    start_time = time.time()
+
+    @app.get("/health")
+    async def health():
+        return {"status": "ok", "uptime": int(time.time() - start_time)}
+
+    @app.get("/health/agents")
+    async def health_agents():
+        stats = pool.stats if pool else {"by_agent": {}}
+        agent_list = []
+        for name, cfg in agents_cfg.items():
+            agent_list.append({
+                "name": name,
+                "mode": cfg.get("mode", "pty"),
+                "alive_sessions": stats["by_agent"].get(name, 0),
+            })
+        return {"agents": agent_list}
+
+    if pool:
+        @app.delete("/sessions/{agent}/{session_id}")
+        async def delete_session(agent: str = PathParam(...), session_id: str = PathParam(...)):
+            await pool.close(agent, session_id)
+            return {"status": "closed", "agent": agent, "session_id": session_id}
+
+    async def cleanup_loop():
         while True:
-            await asyncio.sleep(3600)  # check every hour
-            cutoff = time.time() - ttl_hours * 3600
-            for base in session_bases:
-                base_path = Path(base)
-                if not base_path.exists():
-                    continue
-                for d in base_path.iterdir():
-                    if d.is_dir() and d.stat().st_mtime < cutoff:
-                        shutil.rmtree(d, ignore_errors=True)
-                        log.info("🧹 Cleaned expired session: %s", d.name)
+            await asyncio.sleep(3600)
+            if pool:
+                await pool.cleanup_idle(ttl_hours * 3600)
 
     @app.on_event("startup")
-    async def start_cleanup():
-        asyncio.create_task(cleanup_sessions())
+    async def on_startup():
+        asyncio.create_task(cleanup_loop())
 
-    log.info("🔒 Allowed IPs: %s", allowed_ips)
-    log.info("🧹 Session TTL: %d hours", ttl_hours)
-    log.info("🚀 Starting ACP server on %s:%s", host, port)
+    @app.on_event("shutdown")
+    async def on_shutdown():
+        if pool:
+            log.info("shutting down, killing all subprocesses...")
+            await pool.shutdown()
 
-    uvicorn.run(app, host=host, port=port, log_level="debug" if args.verbose else "info")
+    log.info("allowed_ips=%s", allowed_ips)
+    if pool:
+        log.info("pool: max=%d max_per_agent=%d", pool_cfg.get("max_processes", 20), pool_cfg.get("max_per_agent", 10))
+    log.info("auth_token=%s", auth_token[:8] + "..." if len(auth_token) > 8 else auth_token)
+    log.info("starting on %s:%s", host, port)
+
+    uvicorn.run(app, host=host, port=port, log_level="debug" if args.verbose else "info",
+                timeout_graceful_shutdown=shutdown_timeout)
 
 
 if __name__ == "__main__":

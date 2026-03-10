@@ -1,161 +1,114 @@
 # ACP Bridge
 
-将本地 CLI agent（如 Kiro CLI、Claude Code）通过 [ACP 协议](https://agentcommunicationprotocol.dev/) HTTP API 对外暴露的桥接服务。
+将本地 CLI agent（如 Kiro CLI、Claude Code）通过 [ACP 协议](https://agentclientprotocol.com/) HTTP API 对外暴露的桥接服务。
 
 ## 架构概览
 
 ```
-┌──────────────┐    HTTP/JSON     ┌──────────────┐    subprocess    ┌──────────────┐
+┌──────────────┐    HTTP/SSE      ┌──────────────┐   ACP stdio     ┌──────────────┐
 │  远程调用方   │ ──────────────▶ │  ACP Bridge   │ ──────────────▶ │  CLI Agent    │
-│  (agent/脚本) │ ◀────────────── │  (uvicorn)    │ ◀────────────── │  (本地进程)   │
-└──────────────┘   ACP response   └──────────────┘    stdout parse  └──────────────┘
+│  (skill/插件) │ ◀── SSE 事件 ── │  (uvicorn)    │ ◀── JSON-RPC ── │  kiro/claude  │
+└──────────────┘                  └──────────────┘                  └──────────────┘
                                         │
                                    IP 白名单 +
                                    Bearer Token
 ```
 
-核心思路：Bridge 是一个 ASGI 应用，接收 ACP 协议的 HTTP 请求，将 prompt 通过 subprocess 传给本地 CLI，按 `output_mode` 解析终端输出后返回标准 ACP 响应。
+两种 agent 调用模式：
+- **ACP 模式**（推荐）：`kiro-cli acp` — 通过 stdio JSON-RPC 双向通信，支持结构化事件流（thinking、tool_call、text）、进程复用、多轮上下文保持
+- **PTY 模式**（fallback）：subprocess 逐行读 stdout，适用于不支持 ACP 的旧 CLI
 
 ## 功能
 
-- 启动时自动注册所有 `enabled: true` 的 agent，通过配置文件管理
-- Bearer Token 认证 + IP 白名单双重安全
-- 基于 UUID session_id 的会话隔离，不同 agent 互不干扰
-- 支持多轮对话（同一 session_id 自动 resume，可按 agent 关闭）
-- 按 `output_mode` 配置不同的输出解析策略（`kiro`、`raw` 等）
-- 自动清理过期 session（`session_ttl_hours` 可配置）
-- `--verbose` 模式输出详细请求/响应日志
+- ACP 协议原生支持：结构化事件流（thinking / tool_call / text / status）
+- 进程池管理：同一 session 复用子进程，多轮对话上下文自动保持
+- 同步 + SSE 流式双模式
+- Bearer Token + IP 白名单双重认证
+- 自动清理空闲 session（可配置 TTL）
+- 支持多 agent 并发（kiro、claude 等）
+- PTY fallback 兼容不支持 ACP 的 CLI
 
 ## 项目结构
 
 ```
 acp-bridge/
-├── main.py           # 入口：读取配置、自动注册 enabled agents、session 清理、启动 uvicorn
+├── main.py              # 入口：配置加载、进程池初始化、双模式 handler 注册
 ├── src/
-│   ├── agents.py     # CLI 调用逻辑：subprocess 管理、按 output_mode 解析输出
-│   └── security.py   # 安全中间件（IP 白名单 + Bearer Token 认证）
+│   ├── acp_client.py    # ACP 进程池 + JSON-RPC 连接管理
+│   ├── agents.py        # agent handler（ACP 模式 + PTY fallback）
+│   ├── sse.py           # ACP session/update → SSE 事件转换
+│   └── security.py      # 安全中间件（IP 白名单 + Bearer Token）
 ├── skill/
-│   ├── SKILL.md      # OpenClaw skill 定义
-│   └── acp-client.sh # 客户端调用脚本
+│   ├── SKILL.md         # Kiro skill 定义
+│   └── acp-client.sh    # 客户端调用脚本
 ├── test/
-│   └── test.sh       # 集成测试脚本
-├── config.yaml       # 服务配置（端口、安全、agent 定义、session TTL）
-├── pyproject.toml    # Python 项目依赖
-└── uv.lock           # 锁定依赖版本
+│   ├── test.sh          # 集成测试（通过 acp-client.sh 测试）
+│   └── 2026-03-10.md    # 测试结果
+├── config.yaml          # 服务配置
+├── pyproject.toml       # Python 依赖
+└── uv.lock
 ```
 
 ## 环境要求
 
 - Python >= 3.12
 - [uv](https://docs.astral.sh/uv/) 包管理器
-- 已安装并登录的 CLI agent（如 `kiro-cli`、`claude`）
+- 已安装的 CLI agent（如 `kiro-cli`、`claude-agent-acp`）
 
 ## 快速开始
 
 ```bash
-git clone https://github.com/xiwan/acp-bridge.git
 cd acp-bridge
 cp config.yaml.example config.yaml
-# 编辑 config.yaml，填入你的 auth_token 和 allowed_ips
+# 编辑 config.yaml，填入 auth_token 和 allowed_ips
 uv sync
 uv run main.py
 ```
 
-## 从零搭建
-
-### 1. 初始化项目
-
-```bash
-mkdir acp-bridge && cd acp-bridge
-uv init
-uv add acp-sdk pyyaml
-```
-
-依赖说明：
-- `acp-sdk` — IBM 开源的 ACP 协议 SDK，提供 Server/Agent 抽象和 ASGI app 生成
-- `pyyaml` — 解析 config.yaml
-
-### 2. 创建配置文件
-
-`config.yaml`：
+## 配置
 
 ```yaml
 server:
   host: "0.0.0.0"
   port: 8001
-  session_ttl_hours: 24          # 超过此时长的 session 自动清理
+  session_ttl_hours: 24
+  shutdown_timeout: 30
+
+pool:
+  max_processes: 20        # 全局最大子进程数
+  max_per_agent: 10        # 单 agent 最大子进程数
 
 security:
-  auth_token: "<your-token>"     # Bearer 认证 token
+  auth_token: "${ACP_BRIDGE_TOKEN}"   # 支持环境变量引用
   allowed_ips:
     - "127.0.0.1"
-    - "<server-private-ip>"
-    # - "<client-ip>"
 
 agents:
   kiro:
-    enabled: true                # 启动时自动注册
+    enabled: true
+    mode: "acp"                       # ACP 协议模式
     command: "kiro-cli"
-    args: ["chat", "--no-interactive", "--trust-all-tools", "--wrap", "never"]
-    resume_flag: "--resume"
-    supports_resume: true        # 支持多轮对话 resume
-    output_mode: "kiro"          # 使用 kiro 格式解析器
+    acp_args: ["acp", "--trust-all-tools"]
+    working_dir: "/tmp"
     description: "Kiro CLI agent"
-    session_base: "/tmp/acp-bridge-sessions"
   claude:
     enabled: true
-    command: "claude"
-    args: ["-p", "--output-format", "text"]
-    resume_flag: "--resume"
-    supports_resume: false       # claude 不支持 resume
-    output_mode: "raw"           # 纯文本，不做格式解析
-    description: "Claude Code agent"
-    session_base: "/tmp/acp-bridge-sessions"
-```
-
-关键配置说明：
-- `enabled`：控制 agent 是否在启动时注册，设为 `false` 即禁用
-- `session_ttl_hours`：session 目录超过此时长自动清理（每小时检查一次）
-- `output_mode`：输出解析策略，`kiro` 解析 `> `/`│` 格式，`raw` 直接返回纯文本
-- `supports_resume`：是否启用多轮对话的 `--resume` 机制，不支持的 CLI 设为 `false`
-- `auth_token`：Bearer Token 认证，客户端需在 header 中携带
-
-### 3. 启动服务
-
-```bash
-# 前台运行（开发调试）
-uv run main.py
-
-# 详细日志模式
-uv run main.py --verbose
-
-# 后台运行（生产）
-nohup uv run main.py > nohup.out 2>&1 &
-
-# 自定义端口
-uv run main.py --port 9000
-```
-
-### 4. 验证
-
-```bash
-# 检查服务
-curl -H "Authorization: Bearer <token>" http://localhost:8001/agents
-
-# 客户端调用
-export ACP_BRIDGE_URL=http://localhost:8001
-export ACP_TOKEN=<token>
-./skill/acp-client.sh -l
-./skill/acp-client.sh "hello"
-./skill/acp-client.sh -a claude "hello"
-
-# 运行集成测试
-bash test/test.sh
+    mode: "acp"
+    command: "claude-agent-acp"
+    acp_args: []
+    working_dir: "/tmp"
+    description: "Claude Code agent (via ACP adapter)"
+  legacy-cli:
+    enabled: false
+    mode: "pty"                       # PTY fallback
+    command: "some-old-cli"
+    args: ["--non-interactive"]
+    description: "Legacy CLI (no ACP)"
 ```
 
 ## 客户端调用
 
-### 使用 acp-client.sh（推荐）
+### acp-client.sh（推荐）
 
 ```bash
 export ACP_BRIDGE_URL=http://<bridge-ip>:8001
@@ -164,157 +117,96 @@ export ACP_TOKEN=<your-token>
 # 列出可用 agents
 ./skill/acp-client.sh -l
 
-# 调用 kiro（自动生成 session_id）
+# 同步调用
 ./skill/acp-client.sh "帮我看看项目结构"
 
-# 指定 agent
-./skill/acp-client.sh -a claude "分析这段代码"
+# 流式调用（SSE）
+./skill/acp-client.sh --stream "分析这段代码"
 
-# 指定 session_id 继续对话（必须 UUID 格式）
+# 指定 agent
+./skill/acp-client.sh -a claude "hello"
+
+# 多轮对话（同一 session_id）
 ./skill/acp-client.sh -s 00000000-0000-0000-0000-000000000001 "继续上面的问题"
 ```
 
-### 使用 curl
+### curl
 
 ```bash
-# 查看可用 agents
-curl -H "Authorization: Bearer <token>" http://<bridge-ip>:8001/agents
-
-# 调用 agent
-curl -X POST http://<bridge-ip>:8001/runs \
+# 同步
+curl -X POST http://localhost:8001/runs \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <token>" \
-  -d '{
-    "agent_name": "kiro",
-    "session_id": "00000000-0000-0000-0000-000000000001",
-    "input": [{"role":"user","parts":[{"content":"hello","content_type":"text/plain"}]}]
-  }'
+  -d '{"agent_name":"kiro","session_id":"<uuid>",
+       "input":[{"parts":[{"content":"hello","content_type":"text/plain"}]}]}'
+
+# 流式 SSE
+curl -N -X POST http://localhost:8001/runs \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"agent_name":"kiro","mode":"stream",
+       "input":[{"parts":[{"content":"hello","content_type":"text/plain"}]}]}'
 ```
 
-## API 参考
+## SSE 事件格式
 
-### GET /agents
+流式模式下 Bridge 输出的 SSE 事件：
 
-返回已注册的 agent 列表。
+| 事件 type | 含义 | 关键字段 |
+|-----------|------|----------|
+| `message.part` | agent 回复文本 | `part.content` |
+| `message.part` (name=thought) | agent 思考过程 | `part.content`, `part.name` |
+| `run.completed` | 执行完成 | `run.session_id` |
+| `run.failed` | 执行失败 | `run.error.message` |
 
-```json
-{
-  "agents": [
-    {"name": "kiro", "description": "Kiro CLI agent"},
-    {"name": "claude", "description": "Claude Code agent"}
-  ]
-}
-```
+ACP 模式下额外支持的结构化事件（通过 MessagePart 传递）：
 
-### POST /runs
+| 内容前缀 | 含义 |
+|----------|------|
+| `[tool.start]` | 工具调用开始 |
+| `[tool.done]` | 工具调用完成 |
+| `[status]` | 状态更新（如执行计划） |
 
-调用 agent 执行任务。
-
-请求：
-```json
-{
-  "agent_name": "kiro",
-  "session_id": "可选 UUID，多轮对话时传入",
-  "input": [
-    {
-      "role": "user",
-      "parts": [{"content": "你的问题", "content_type": "text/plain"}]
-    }
-  ]
-}
-```
-
-成功响应：
-```json
-{
-  "run_id": "<uuid>",
-  "status": "completed",
-  "session_id": "<uuid>",
-  "output": [
-    {
-      "role": "agent/kiro",
-      "parts": [{"content": "回复内容", "content_type": "text/plain"}]
-    }
-  ]
-}
-```
-
-## Session 管理
-
-- `session_id` 必须是 **UUID 格式**，非 UUID 会返回 422 错误
-- 客户端必须自行保存 session_id，变化即视为新对话
-- 不同 agent 使用不同 session_id，避免会话冲突
-- `acp-client.sh` 不指定 `-s` 时按 agent 名自动生成确定性 UUID
-- 超过 `session_ttl_hours` 的 session 目录自动清理
-
-## 扩展：添加新的 CLI Agent
-
-1. 在 `config.yaml` 中添加配置块：
-
-```yaml
-agents:
-  mycli:
-    enabled: true
-    command: "mycli"
-    args: ["--non-interactive"]
-    supports_resume: false
-    output_mode: "raw"           # 或注册自定义解析器
-    description: "My custom CLI agent"
-    session_base: "/tmp/acp-bridge-sessions"
-```
-
-2. 如果输出格式特殊，在 `src/agents.py` 的 `REPLY_EXTRACTORS` 中注册新的解析函数：
-
-```python
-def extract_reply_mycli(raw: str) -> str:
-    # 自定义解析逻辑
-    return strip_ansi(raw).strip()
-
-REPLY_EXTRACTORS = {
-    "kiro": extract_reply_kiro,
-    "raw": extract_reply_raw,
-    "mycli": extract_reply_mycli,
-}
-```
-
-3. 重启服务即可生效。
-
-## OpenClaw Skill 集成
-
-`skill/` 目录包含符合 [AgentSkills 规范](https://agentskills.io/specification) 的 skill 定义，可让 OpenClaw agent 直接调用远程 CLI agent。
-
-安装方式（任选其一）：
+## 测试
 
 ```bash
-# 全局安装
-cp -r skill/ ~/.openclaw/skills/acp-bridge/
-
-# 或工作区安装（优先级更高）
-cp -r skill/ <workspace>/skills/acp-bridge/
+ACP_TOKEN=<token> bash test/test.sh http://127.0.0.1:8001
 ```
 
-安装后 OpenClaw 会在启动时自动加载该 skill。详细用法见 [skill/SKILL.md](skill/SKILL.md)。
+测试覆盖：列出 agents、同步调用、流式调用、多轮对话上下文保持、错误处理。
 
-## 安全注意事项
+## API 端点
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| GET | `/agents` | 列出已注册 agents | 需要 |
+| POST | `/runs` | 调用 agent | 需要 |
+| GET | `/health` | 健康检查 | 不需要 |
+| GET | `/health/agents` | agent 状态 + 活跃 session 数 | 需要 |
+| DELETE | `/sessions/{agent}/{session_id}` | 关闭指定 session | 需要 |
+
+## 进程池管理
+
+- 每个 `(agent, session_id)` 对应一个独立的 CLI ACP 子进程
+- 同一 session 的多轮对话复用同一子进程，上下文自动保持
+- 子进程崩溃时下次请求自动重建（上下文丢失，会提示用户）
+- 空闲超过 `session_ttl_hours` 的子进程自动清理
+- 超过 `max_processes` / `max_per_agent` 限制时返回 pool_exhausted 错误
+
+## 安全
 
 - IP 白名单 + Bearer Token 双重认证
-- CLI agent 以 Bridge 进程的用户权限运行，注意权限最小化
-- `auth_token` 建议通过环境变量注入，避免明文存储在配置文件中
-- 生产环境建议配合安全组/防火墙限制端口访问
+- `/health` 免认证（供 LB 探活）
+- token 支持 `${ENV_VAR}` 环境变量引用，避免明文存储
+- CLI agent 以 Bridge 进程用户权限运行
 
 ## 故障排查
 
 | 现象 | 原因 | 处理 |
 |------|------|------|
-| `403 forbidden` | IP 不在白名单 | 在 `config.yaml` 的 `allowed_ips` 中添加客户端 IP |
-| `401 unauthorized` | token 不正确 | 检查 `Authorization: Bearer <token>` 是否匹配 |
-| `422 Unprocessable` | session_id 不是 UUID | 使用 UUID 格式 |
-| 请求一直不返回 | CLI 子进程卡住或 session 冲突 | 用 `--verbose` 查看日志 |
-| agent 返回空 | CLI 在无 TTY 环境行为异常 | 检查 `output_mode` 配置，查看服务端日志 |
-| `连接失败` | 服务未启动或端口不对 | 确认 Bridge 进程在运行 |
-
-## 已知限制
-
-- 同步调用模型：每次请求阻塞等待 CLI 执行完成（`raw` 模式支持流式输出）
-- 无内置重试/超时机制，长时间运行的任务可能导致 HTTP 超时
-- 后台运行时需注意 CLI 的 TTY 检测行为（已通过环境变量 `TERM=dumb` 等缓解）
+| `403 forbidden` | IP 不在白名单 | 添加客户端 IP 到 `allowed_ips` |
+| `401 unauthorized` | token 不正确 | 检查 Bearer token |
+| `pool_exhausted` | 并发 session 超限 | 调大 `max_processes` 或清理空闲 session |
+| 多轮对话上下文丢失 | 子进程崩溃后自动重建 | 正常现象，会提示用户 |
+| 连接失败 | 服务未启动 | 确认 Bridge 进程在运行 |

@@ -1,9 +1,9 @@
 #!/bin/bash
-# ACP Bridge 客户端 — 调用远程 CLI agent 并格式化输出
+# ACP Bridge 客户端 — 调用远程 CLI agent（适配 acp-sdk 标准 API）
 # 用法:
-#   acp-client.sh <prompt>                    # 同步调用（自动生成 session_id）
-#   acp-client.sh --stream <prompt>           # 流式调用（SSE，实时输出）
-#   acp-client.sh -s <uuid> <prompt>          # 指定 session_id（必须 UUID 格式）
+#   acp-client.sh <prompt>                    # 同步调用
+#   acp-client.sh --stream <prompt>           # 流式调用（SSE）
+#   acp-client.sh -s <uuid> <prompt>          # 指定 session_id
 #   acp-client.sh -a <agent> <prompt>         # 指定 agent
 #   acp-client.sh -l                          # 列出可用 agents
 #
@@ -47,58 +47,54 @@ import sys, json
 data = json.load(sys.stdin)
 agents = data.get('agents', data) if isinstance(data, dict) else data
 for a in agents:
-    print(f\"  {a['name']:15s} {a.get('description','')}\")
+    name = a.get('name', a.get('agent', ''))
+    desc = a.get('description', a.get('metadata', {}).get('description', ''))
+    print(f'  {name:15s} {desc}')
 "
     exit 0
 fi
 
 if [[ $# -eq 0 ]]; then
     echo "用法: acp-client.sh [选项] <prompt>" >&2
-    echo "  -l            列出可用 agents" >&2
-    echo "  -a <agent>    指定 agent (默认: kiro)" >&2
-    echo "  -s <uuid>     指定 session_id (UUID 格式)" >&2
-    echo "  -u <url>      Bridge 地址" >&2
-    echo "  --stream      流式输出 (SSE)" >&2
-    echo "  --retries <n> 失败重试次数 (默认: 2)" >&2
     exit 1
 fi
 
 PROMPT="$*"
 
-# 未指定 session 时，按 agent 名生成确定性 UUID
 if [[ -z "$SESSION" ]]; then
     SESSION=$(python3 -c "import uuid; print(uuid.uuid5(uuid.NAMESPACE_DNS, '$AGENT'))")
 fi
 
-# 构建 JSON payload
-MODE="sync"
-$STREAM && MODE="stream"
-
+# acp-sdk 标准 payload: input 是 Message 数组，每个 Message 有 parts
 PAYLOAD=$(python3 -c "
 import json, sys
-d = {'agent_name': sys.argv[1], 'session_id': sys.argv[3], 'mode': sys.argv[4],
-     'input': [{'role': 'user', 'parts': [{'content': sys.argv[2], 'content_type': 'text/plain'}]}]}
-print(json.dumps(d))
-" "$AGENT" "$PROMPT" "$SESSION" "$MODE")
-
-# 带重试的调用
-call_api() {
-    curl -sf -X POST "${AUTH_HEADER[@]}" "$URL/runs" \
-        -H "Content-Type: application/json" \
-        -d "$PAYLOAD" 2>&1
+d = {
+    'agent_name': sys.argv[1],
+    'session_id': sys.argv[3],
+    'input': [{'parts': [{'content': sys.argv[2], 'content_type': 'text/plain'}]}],
 }
+if sys.argv[4] == 'stream':
+    d['mode'] = 'stream'
+print(json.dumps(d))
+" "$AGENT" "$PROMPT" "$SESSION" "$($STREAM && echo stream || echo sync)")
 
-call_api_stream() {
-    curl -sN -X POST "${AUTH_HEADER[@]}" "$URL/runs" \
-        -H "Content-Type: application/json" \
-        -H "Accept: text/event-stream" \
-        -d "$PAYLOAD" 2>&1
+call_api() {
+    if $STREAM; then
+        curl -sN -X POST "${AUTH_HEADER[@]}" "$URL/runs" \
+            -H "Content-Type: application/json" \
+            -H "Accept: text/event-stream" \
+            -d "$PAYLOAD" 2>&1
+    else
+        curl -sf -X POST "${AUTH_HEADER[@]}" "$URL/runs" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" 2>&1
+    fi
 }
 
 retry() {
-    local fn="$1" attempt=0
+    local attempt=0
     while true; do
-        if RESP=$($fn); then
+        if RESP=$(call_api); then
             echo "$RESP"
             return 0
         fi
@@ -114,39 +110,48 @@ retry() {
 }
 
 if $STREAM; then
-    # 流式模式：解析 SSE 事件，实时输出内容
-    retry call_api_stream | python3 -c "
-import sys
+    # 流式模式：解析 acp-sdk SSE 事件
+    retry | python3 -c "
+import sys, json
 
 for line in sys.stdin:
     line = line.rstrip('\n')
-    if line.startswith('data: '):
-        import json
-        try:
-            evt = json.loads(line[6:])
-        except json.JSONDecodeError:
-            continue
-        etype = evt.get('type', '')
-        if etype == 'message.part':
-            part = evt.get('part', {})
-            content = part.get('content', '')
+    if not line.startswith('data: '):
+        continue
+    try:
+        evt = json.loads(line[6:])
+    except json.JSONDecodeError:
+        continue
+    etype = evt.get('type', '')
+
+    if etype == 'message.part':
+        # acp-sdk format: part.content / part.name
+        part = evt.get('part', {})
+        content = part.get('content', '')
+        name = part.get('name', '')
+        if name == 'thought':
             if content:
-                print(content, end='', flush=True)
-        elif etype == 'run.completed':
-            run = evt.get('run', {})
-            sid = run.get('session_id')
-            if sid:
-                print(f'session_id: {sid}', file=sys.stderr)
-        elif etype == 'run.failed':
-            run = evt.get('run', {})
-            err = run.get('error', {})
-            print(f\"❌ {err.get('code','error')}: {err.get('message','未知错误')}\", file=sys.stderr)
-            sys.exit(1)
+                print(f'💭 {content}', end='', flush=True)
+        elif content:
+            print(content, end='', flush=True)
+
+    elif etype in ('run.completed', 'message.completed'):
+        run = evt.get('run', {})
+        sid = run.get('session_id')
+        if sid:
+            print(f'session_id: {sid}', file=sys.stderr)
+
+    elif etype == 'run.failed':
+        run = evt.get('run', {})
+        err = run.get('error', {})
+        print(f\"❌ {err.get('code','error')}: {err.get('message','未知错误')}\", file=sys.stderr)
+        sys.exit(1)
+
 print()
 " || exit 1
 else
-    # 同步模式
-    RESP=$(retry call_api) || exit 1
+    # 同步模式：解析 acp-sdk Run 响应
+    RESP=$(retry) || exit 1
 
     python3 -c "
 import sys, json
@@ -160,8 +165,17 @@ except json.JSONDecodeError:
 
 status = r.get('status', 'unknown')
 if status == 'completed':
-    parts = [p['content'] for m in r.get('output', []) for p in m.get('parts', [])]
-    print('\n'.join(parts))
+    # acp-sdk: output 是 Message 数组
+    parts = []
+    for msg in r.get('output', []):
+        for p in msg.get('parts', []):
+            content = p.get('content', '')
+            name = p.get('name', '')
+            if name == 'thought':
+                continue  # skip thoughts in sync mode
+            if content:
+                parts.append(content)
+    print('\n'.join(parts) if parts else '(empty response)')
     sid = r.get('session_id')
     if sid:
         print(f'session_id: {sid}', file=sys.stderr)

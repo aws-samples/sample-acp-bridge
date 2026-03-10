@@ -1,173 +1,129 @@
+"""Agent handlers — ACP mode + PTY fallback."""
+
 import asyncio
 import logging
 import os
 import re
+import uuid
 from collections.abc import AsyncGenerator
-from pathlib import Path
 
-import yaml
 from acp_sdk.models import Message, MessagePart
-from acp_sdk.server import Context, RunYield, RunYieldResume, Server
+from acp_sdk.server import Context, RunYield, RunYieldResume
+
+from .acp_client import AcpConnection, AcpError, AcpProcessPool, PoolExhaustedError
+from .sse import transform_notification
+
+log = logging.getLogger("acp-bridge.agents")
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\[\?25[hl]")
-
-log = logging.getLogger("acp-bridge.agent")
-
-
-def load_config(path: str = "config.yaml") -> dict:
-    with open(path) as f:
-        return yaml.safe_load(f)
 
 
 def strip_ansi(text: str) -> str:
     return ANSI_RE.sub("", text)
 
 
-def extract_reply_kiro(raw: str) -> str:
-    lines = strip_ansi(raw).strip().splitlines()
-    content = []
-    started = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("▸"):
-            break
-        if stripped.startswith("> "):
-            content.append(stripped[2:])
-            started = True
-        elif started:
-            cleaned = stripped.lstrip("│").strip()
-            if cleaned:
-                content.append(cleaned)
-    return "\n".join(content).strip() or strip_ansi(raw).strip()
-
-
-def extract_reply_raw(raw: str) -> str:
-    return strip_ansi(raw).strip()
-
-
-REPLY_EXTRACTORS = {
-    "kiro": extract_reply_kiro,
-    "raw": extract_reply_raw,
-}
-
-# raw mode supports streaming line-by-line; others need full output to parse
-STREAMING_MODES = {"raw"}
-
-
-async def has_session(command: str, cwd: str) -> bool:
-    proc = await asyncio.create_subprocess_exec(
-        command, "chat", "--list-sessions",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=cwd,
-    )
-    out, _ = await proc.communicate()
-    return "SessionId" in out.decode()
-
-
-async def _read_lines(stream) -> list[str]:
-    lines = []
-    while True:
-        line = await stream.readline()
-        if not line:
-            break
-        lines.append(line.decode())
-    return lines
-
-
-def make_agent_handler(agent_cfg: dict, verbose: bool = False):
-    command = agent_cfg["command"]
-    base_args = agent_cfg["args"]
-    resume_flag = agent_cfg.get("resume_flag", "--resume")
-    supports_resume = agent_cfg.get("supports_resume", True)
-    session_base = Path(agent_cfg.get("session_base", "/tmp/acp-bridge-sessions"))
-    output_mode = agent_cfg.get("output_mode", "raw")
-    extract_reply = REPLY_EXTRACTORS.get(output_mode, extract_reply_raw)
-    streamable = output_mode in STREAMING_MODES
+def make_acp_agent_handler(agent_name: str, pool: AcpProcessPool):
+    """ACP protocol handler — structured events via stdio JSON-RPC."""
 
     async def handler(
         input: list[Message], context: Context
     ) -> AsyncGenerator[RunYield, RunYieldResume]:
-        prompt = "".join(
-            part.content for msg in input for part in msg.parts
-        )
+        prompt = "".join(part.content for msg in input for part in msg.parts if part.content)
+        session_id = str(context.session.id) if context.session else str(uuid.uuid4())
 
+        log.info("acp_start: agent=%s session=%s len=%d", agent_name, session_id, len(prompt))
+
+        try:
+            conn = await pool.get_or_create(agent_name, session_id)
+        except PoolExhaustedError as e:
+            log.error("pool_exhausted: agent=%s: %s", agent_name, e)
+            yield Message(parts=[MessagePart(content=f"[error] pool_exhausted: {e}", content_type="text/plain")])
+            return
+        except AcpError as e:
+            log.error("agent_error: agent=%s: %s", agent_name, e)
+            yield Message(parts=[MessagePart(content=f"[error] {e}", content_type="text/plain")])
+            return
+
+        if conn.session_reset:
+            yield MessagePart(content="[status] 会话已过期，已自动创建新会话（之前的对话上下文已丢失）\n",
+                              content_type="text/plain")
+            conn.session_reset = False
+
+        try:
+            last_yield_time = asyncio.get_event_loop().time()
+            heartbeat_interval = 15
+
+            async for notification in conn.session_prompt(prompt):
+                if "_prompt_result" in notification:
+                    log.info("acp_done: agent=%s session=%s stop=%s",
+                             agent_name, session_id,
+                             notification["_prompt_result"].get("result", {}).get("stopReason", "?"))
+                    continue
+
+                event = transform_notification(notification)
+                if event is None:
+                    now = asyncio.get_event_loop().time()
+                    if now - last_yield_time > heartbeat_interval:
+                        yield MessagePart(content="", content_type="text/plain", name="heartbeat")
+                        last_yield_time = now
+                    continue
+
+                last_yield_time = asyncio.get_event_loop().time()
+
+                if event["type"] == "message.part":
+                    yield MessagePart(content=event["content"], content_type="text/plain")
+                elif event["type"] == "message.thinking":
+                    yield MessagePart(content=event["content"], content_type="text/plain", name="thought")
+                elif event["type"] in ("tool.start", "tool.done"):
+                    yield MessagePart(
+                        content=f"[{event['type']}] {event.get('title', '')} ({event.get('status', '')})\n",
+                        content_type="text/plain")
+                elif event["type"] == "status":
+                    yield MessagePart(content=f"[status] {event['text']}\n", content_type="text/plain")
+
+        except Exception as e:
+            log.error("agent_crashed: agent=%s session=%s error=%s", agent_name, session_id, e)
+            pool.remove(agent_name, session_id)
+            yield Message(parts=[MessagePart(content=f"[error] agent_crashed: {e}", content_type="text/plain")])
+
+    return handler
+
+
+def make_pty_agent_handler(agent_cfg: dict, verbose: bool = False):
+    """Legacy PTY handler — subprocess stdout line-by-line."""
+    command = agent_cfg["command"]
+    args = agent_cfg.get("args", [])
+
+    async def handler(
+        input: list[Message], context: Context
+    ) -> AsyncGenerator[RunYield, RunYieldResume]:
+        prompt = "".join(part.content for msg in input for part in msg.parts if part.content)
         session_id = str(context.session.id) if context.session else "default"
-        session_dir = session_base / session_id
-        session_dir.mkdir(parents=True, exist_ok=True)
 
-        log.info("📨 session=%s agent=%s prompt=%s", session_id, command, prompt[:80])
-        log.debug("📂 session_dir=%s", session_dir)
-
-        cmd = [command] + base_args.copy()
-        resuming = False
-        if supports_resume:
-            resuming = await has_session(command, str(session_dir))
-            if resuming:
-                cmd.append(resume_flag)
-        cmd.append(prompt)
-
-        log.info("🔧 exec: %s (resume=%s, stream=%s)", " ".join(cmd[:4]) + " ...", resuming, streamable)
-        log.debug("🔧 full cmd: %s", cmd)
+        log.info("pty_start: cmd=%s session=%s", command, session_id)
 
         env = os.environ.copy()
         env.update({"TERM": "dumb", "NO_COLOR": "1", "LANG": "en_US.UTF-8"})
 
+        cmd = [command] + list(args) + [prompt]
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.DEVNULL,
-            cwd=str(session_dir),
+            cwd=agent_cfg.get("working_dir", "/tmp"),
             env=env,
         )
 
-        if streamable:
-            # Stream mode: yield each line as a MessagePart as it arrives
-            total_len = 0
-            while True:
-                line = await proc.stdout.readline()
-                if not line:
-                    break
-                text = strip_ansi(line.decode()).rstrip("\n")
-                if text:
-                    total_len += len(text)
-                    yield MessagePart(content=text + "\n", content_type="text/plain")
+        while True:
+            line = await proc.stdout.readline()
+            if not line:
+                break
+            text = strip_ansi(line.decode()).rstrip("\n")
+            if text:
+                yield MessagePart(content=text + "\n", content_type="text/plain")
 
-            stderr_data = await proc.stderr.read()
-            await proc.wait()
-
-            # If nothing came from stdout, try stderr
-            if total_len == 0 and stderr_data:
-                log.debug("⚠️  stdout empty, falling back to stderr")
-                text = strip_ansi(stderr_data.decode()).strip()
-                if text:
-                    yield MessagePart(content=text, content_type="text/plain")
-                    total_len = len(text)
-
-            log.info("✅ session=%s exit=%s streamed_len=%d", session_id, proc.returncode, total_len)
-        else:
-            # Buffered mode: collect all output, parse, then yield
-            stdout_lines, stderr_lines = await asyncio.gather(
-                _read_lines(proc.stdout),
-                _read_lines(proc.stderr),
-            )
-            await proc.wait()
-
-            raw = "".join(stdout_lines)
-            stderr_text = "".join(stderr_lines)
-            if not raw.strip() and stderr_text:
-                log.debug("⚠️  stdout empty, falling back to stderr")
-                raw = stderr_text
-            reply = extract_reply(raw)
-
-            log.info("✅ session=%s exit=%s stdout_len=%d stderr_len=%d reply_len=%d",
-                     session_id, proc.returncode, len(raw), len(stderr_text), len(reply))
-            if verbose:
-                log.debug("📤 stdout:\n%s", strip_ansi(raw)[:2000])
-                if stderr_text:
-                    log.debug("⚠️  stderr:\n%s", stderr_text[:500])
-
-            yield Message(parts=[MessagePart(content=reply, content_type="text/plain")])
+        await proc.wait()
+        log.info("pty_done: cmd=%s session=%s exit=%s", command, session_id, proc.returncode)
 
     return handler
