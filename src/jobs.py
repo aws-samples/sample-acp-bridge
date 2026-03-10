@@ -28,6 +28,7 @@ class Job:
     completed_at: float = 0
     callback_url: str = ""
     callback_meta: dict = field(default_factory=dict)
+    webhook_sent: bool = False
 
     def to_dict(self) -> dict:
         d = {"job_id": self.job_id, "agent": self.agent, "session_id": self.session_id,
@@ -130,6 +131,8 @@ class JobManager:
                 resp = await client.post(url, json=payload, headers=headers)
                 log.info("webhook_sent: job=%s target=%s status=%d",
                          job.job_id, "discord" if is_discord else "openclaw", resp.status_code)
+                if resp.status_code == 200:
+                    job.webhook_sent = True
         except Exception as e:
             log.error("webhook_failed: job=%s error=%s", job.job_id, e)
 
@@ -206,3 +209,8 @@ class JobManager:
                 j.completed_at = now
                 if j.callback_url:
                     asyncio.create_task(self._webhook(j))
+        # Retry unsent webhooks for completed/failed jobs
+        for j in self._jobs.values():
+            if j.status in ("completed", "failed") and j.callback_url and not j.webhook_sent:
+                log.info("webhook_retry: job=%s agent=%s", j.job_id, j.agent)
+                asyncio.create_task(self._webhook(j))

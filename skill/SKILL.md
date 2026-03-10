@@ -160,16 +160,32 @@ $ACP_CLIENT -s <uuid> "后续问题"
 
 ### 提交异步任务
 
+异步模式需要携带 Discord 回调信息，**必须直接调用 `/jobs` 端点**，不要用 `acp-client.sh --async`。
+
+OpenClaw agent 在收到 Discord 消息时，可以从当前会话的 `deliveryContext` 获取 channel 和 account 信息：
+
 ```bash
-$ACP_CLIENT --async -a <agent> "<prompt>"
+curl -X POST "$ACP_BRIDGE_URL/jobs" \
+  -H "Authorization: Bearer $ACP_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_name": "<agent>",
+    "prompt": "<用户的 prompt>",
+    "discord_target": "<deliveryContext.to>",
+    "callback_meta": {
+      "account_id": "<deliveryContext.accountId>"
+    }
+  }'
 ```
 
-立即返回 `job_id`，不等待结果。
+返回：`{"job_id": "xxx", "status": "pending"}`
+
+agent 收到后应立即回复用户："✅ 已提交，完成后会自动推送结果。"
 
 ### 查询任务状态
 
 ```bash
-$ACP_CLIENT --job-status <job_id>
+curl -H "Authorization: Bearer $ACP_TOKEN" "$ACP_BRIDGE_URL/jobs/<job_id>"
 ```
 
 ### 完成后自动推送到 Discord
@@ -180,30 +196,8 @@ $ACP_CLIENT --job-status <job_id>
 
 | 字段 | 来源 | 说明 |
 |------|------|------|
-| `discord_target` | 当前会话的 Discord channel ID | 格式：`channel:<id>` 或 `#channel-name` |
-| `callback_meta.account_id` | OpenClaw 的 Discord bot account ID | 如 `johnwick`，用于标识用哪个 bot 发消息 |
-
-**通过 acp-client.sh 提交（适合 skill 调用）：**
-
-```bash
-# 需要用 curl 直接调 /jobs 端点传完整参数
-curl -X POST "$ACP_BRIDGE_URL/jobs" \
-  -H "Authorization: Bearer $ACP_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "agent_name": "kiro",
-    "prompt": "帮我重构模块",
-    "discord_target": "channel:1477514611317145732",
-    "callback_meta": {
-      "account_id": "johnwick"
-    }
-  }'
-```
-
-**如何获取这些值：**
-
-- `discord_target`：OpenClaw 收到 Discord 消息时，`deliveryContext.to` 就是目标频道（如 `channel:1477514611317145732`）
-- `account_id`：OpenClaw 的 `deliveryContext.accountId`（如 `johnwick`）
+| `discord_target` | `deliveryContext.to` | 格式：`channel:<id>` 或 `#channel-name` |
+| `callback_meta.account_id` | `deliveryContext.accountId` | 如 `johnwick`，用于标识用哪个 bot 发消息 |
 
 **缺少任一字段的后果：**
 
