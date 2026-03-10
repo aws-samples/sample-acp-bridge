@@ -133,6 +133,21 @@ def main():
             return {"error": "job not found"}, 404
         return job.to_dict()
 
+    @app.get("/jobs")
+    async def list_jobs():
+        if not job_mgr:
+            return {"jobs": []}
+        jobs = job_mgr.list_jobs()
+        return {
+            "jobs": [j.to_dict() for j in jobs],
+            "summary": {
+                "pending": sum(1 for j in jobs if j.status == "pending"),
+                "running": sum(1 for j in jobs if j.status == "running"),
+                "completed": sum(1 for j in jobs if j.status == "completed"),
+                "failed": sum(1 for j in jobs if j.status == "failed"),
+            },
+        }
+
     @app.get("/health")
     async def health():
         return {"status": "ok", "uptime": int(time.time() - start_time)}
@@ -157,7 +172,7 @@ def main():
 
     async def cleanup_loop():
         while True:
-            await asyncio.sleep(3600)
+            await asyncio.sleep(60)
             if pool:
                 await pool.cleanup_idle(ttl_hours * 3600)
             if job_mgr:
@@ -177,6 +192,8 @@ def main():
     if pool:
         log.info("pool: max=%d max_per_agent=%d", pool_cfg.get("max_processes", 20), pool_cfg.get("max_per_agent", 10))
     log.info("auth_token=%s", auth_token[:8] + "..." if len(auth_token) > 8 else auth_token)
+    if job_mgr:
+        log.info("jobs: monitor=60s stuck_timeout=600s webhook=%s", webhook_cfg.get("url", "(none)"))
     log.info("starting on %s:%s", host, port)
 
     uvicorn.run(app, host=host, port=port, log_level="debug" if args.verbose else "info",

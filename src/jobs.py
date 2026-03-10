@@ -31,7 +31,11 @@ class Job:
 
     def to_dict(self) -> dict:
         d = {"job_id": self.job_id, "agent": self.agent, "session_id": self.session_id,
-             "status": self.status, "created_at": self.created_at}
+             "status": self.status, "created_at": self.created_at,
+             "discord_target": self.callback_meta.get("discord_target", ""),
+             "account_id": self.callback_meta.get("account_id", "")}
+        if self.status == "running":
+            d["elapsed"] = round(time.time() - self.created_at, 1)
         if self.status in ("completed", "failed"):
             d["result"] = self.result
             d["error"] = self.error
@@ -61,6 +65,9 @@ class JobManager:
 
     def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
+
+    def list_jobs(self, limit: int = 50) -> list[Job]:
+        return sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)[:limit]
 
     async def _run(self, job: Job):
         job.status = "running"
@@ -182,8 +189,20 @@ class JobManager:
 
         return {"embeds": [embed]}
 
-    def cleanup(self, max_age: float = 3600):
-        cutoff = time.time() - max_age
+    def cleanup(self, max_age: float = 3600, stuck_timeout: float = 600):
+        now = time.time()
+        # Clean completed jobs older than max_age
+        cutoff = now - max_age
         stale = [jid for jid, j in self._jobs.items() if j.completed_at > 0 and j.completed_at < cutoff]
         for jid in stale:
             del self._jobs[jid]
+        # Mark stuck running jobs as failed
+        for j in self._jobs.values():
+            if j.status == "running" and now - j.created_at > stuck_timeout:
+                log.warning("job_stuck: job=%s agent=%s duration=%.0fs, marking failed",
+                            j.job_id, j.agent, now - j.created_at)
+                j.status = "failed"
+                j.error = f"timeout: job stuck for {int(now - j.created_at)}s"
+                j.completed_at = now
+                if j.callback_url:
+                    asyncio.create_task(self._webhook(j))

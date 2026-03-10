@@ -153,3 +153,71 @@ $ACP_CLIENT -s <uuid> "后续问题"
 - 每次调用响应时间取决于远程 CLI（通常 3-10 秒，复杂任务更久）
 - prompt 中的特殊字符由脚本自动处理 JSON 转义，无需手动处理
 - 多个 parts 会被拼接为一个完整 prompt 发送给 CLI
+
+## 异步任务模式
+
+对于耗时较长的任务，支持异步提交 + 完成后自动推送到 Discord。
+
+### 提交异步任务
+
+```bash
+$ACP_CLIENT --async -a <agent> "<prompt>"
+```
+
+立即返回 `job_id`，不等待结果。
+
+### 查询任务状态
+
+```bash
+$ACP_CLIENT --job-status <job_id>
+```
+
+### 完成后自动推送到 Discord
+
+异步任务完成后，Bridge 会通过 OpenClaw Gateway 自动将结果发送到指定的 Discord 频道。
+
+**要让推送生效，提交任务时必须携带以下信息：**
+
+| 字段 | 来源 | 说明 |
+|------|------|------|
+| `discord_target` | 当前会话的 Discord channel ID | 格式：`channel:<id>` 或 `#channel-name` |
+| `callback_meta.account_id` | OpenClaw 的 Discord bot account ID | 如 `johnwick`，用于标识用哪个 bot 发消息 |
+
+**通过 acp-client.sh 提交（适合 skill 调用）：**
+
+```bash
+# 需要用 curl 直接调 /jobs 端点传完整参数
+curl -X POST "$ACP_BRIDGE_URL/jobs" \
+  -H "Authorization: Bearer $ACP_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_name": "kiro",
+    "prompt": "帮我重构模块",
+    "discord_target": "channel:1477514611317145732",
+    "callback_meta": {
+      "account_id": "johnwick"
+    }
+  }'
+```
+
+**如何获取这些值：**
+
+- `discord_target`：OpenClaw 收到 Discord 消息时，`deliveryContext.to` 就是目标频道（如 `channel:1477514611317145732`）
+- `account_id`：OpenClaw 的 `deliveryContext.accountId`（如 `johnwick`）
+
+**缺少任一字段的后果：**
+
+| 缺少 | 结果 |
+|------|------|
+| `discord_target` | 任务正常执行，但不会推送到 Discord（webhook payload 退化为原始 JSON） |
+| `account_id` | webhook 发到 OpenClaw 但缺少 bot 身份，OpenClaw 无法路由到 Discord，返回 500 |
+| 两者都缺 | 任务正常执行，结果只能通过 `GET /jobs/{id}` 查询 |
+
+### 监控
+
+```bash
+# 查看所有任务状态
+curl -H "Authorization: Bearer $ACP_TOKEN" "$ACP_BRIDGE_URL/jobs"
+```
+
+返回所有 job 列表 + 状态统计（pending/running/completed/failed）。running 超过 10 分钟的任务会被自动标记为 failed 并触发回调通知。
