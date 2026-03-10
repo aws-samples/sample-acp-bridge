@@ -196,8 +196,13 @@ curl -H "Authorization: Bearer $ACP_TOKEN" "$ACP_BRIDGE_URL/jobs/<job_id>"
 
 | 字段 | 来源 | 说明 |
 |------|------|------|
-| `discord_target` | `deliveryContext.to` | 格式：`channel:<id>` 或 `#channel-name` |
-| `callback_meta.account_id` | `deliveryContext.accountId` | 如 `johnwick`，用于标识用哪个 bot 发消息 |
+| `discord_target` | `deliveryContext.to` | 服务器频道：`channel:<id>`，DM：`user:<user_id>` |
+| `callback_meta.account_id` | Discord bot 的 account ID | 通常是 `default`（不是 agent ID） |
+
+**注意：**
+- `account_id` 是 OpenClaw 配置的 Discord bot account，通常是 `default`，不是 agent name（如 `johnwick`）
+- DM 频道不能用 `channel:<dm_channel_id>`，必须用 `user:<user_id>` 格式
+- 服务器频道用 `channel:<channel_id>` 或 `#channel-name`
 
 **缺少任一字段的后果：**
 
