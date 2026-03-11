@@ -7,16 +7,11 @@ A bridge service that exposes local CLI agents (Kiro CLI, Claude Code, etc.) via
 ## Architecture
 
 ```
-┌──────────┐         ┌──────────────┐   ACP stdio     ┌──────────────┐
-│ Discord  │         │              │ ──────────────▶ │  CLI Agent    │
-│ User     │         │  ACP Bridge  │ ◀── JSON-RPC ── │  kiro/claude  │
-└────┬─────┘         │  (uvicorn)   │                  └──────────────┘
-     │               │              │
-     ▼               └──────┬───────┘
-┌──────────┐  HTTP/SSE     │  webhook callback
-│ OpenClaw │ ─────────────▶│──────────────┐
-│ Gateway  │ ◀─────────────┘              │
-└──────────┘  /tools/invoke ◀─────────────┘
+┌──────────┐            ┌──────────┐  HTTP JSON req     ┌──────────────┐  ACP stdio     ┌──────────────┐
+│ Discord  │◀──────────▶│ OpenClaw │──────────────────▶│  ACP Bridge  │──────────────▶│  CLI Agent   │
+│ User     │  Discord   │ Gateway  │◀──── SSE stream ───│  (uvicorn)   │◀── JSON-RPC ──│  kiro/claude │
+└──────────┘            └──────────┘◀── /tools/invoke ──└──────────────┘               └──────────────┘
+                                      (async job push)
 ```
 
 Two invocation modes:

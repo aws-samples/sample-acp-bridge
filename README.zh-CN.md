@@ -7,16 +7,11 @@
 ## 架构概览
 
 ```
-┌──────────┐         ┌──────────────┐   ACP stdio     ┌──────────────┐
-│ Discord  │         │              │ ──────────────▶ │  CLI Agent    │
-│ 用户     │         │  ACP Bridge  │ ◀── JSON-RPC ── │  kiro/claude  │
-└────┬─────┘         │  (uvicorn)   │                  └──────────────┘
-     │               │              │
-     ▼               └──────┬───────┘
-┌──────────┐  HTTP/SSE     │  webhook 回调
-│ OpenClaw │ ─────────────▶│──────────────┐
-│ Gateway  │ ◀─────────────┘              │
-└──────────┘  /tools/invoke ◀─────────────┘
+┌──────────┐            ┌──────────┐  HTTP JSON req     ┌──────────────┐  ACP stdio     ┌──────────────┐
+│ Discord  │◀──────────▶│ OpenClaw │──────────────────▶│  ACP Bridge  │──────────────▶│  CLI Agent   │
+│ 用户     │  Discord   │ Gateway  │◀──── SSE stream ───│  (uvicorn)   │◀── JSON-RPC ──│  kiro/claude │
+└──────────┘            └──────────┘◀── /tools/invoke ──└──────────────┘               └──────────────┘
+                                      (async job push)
 ```
 
 两种调用模式：
