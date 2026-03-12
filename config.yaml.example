@@ -1,0 +1,38 @@
+server:
+  host: "0.0.0.0"
+  port: 8001
+  session_ttl_hours: 24
+  shutdown_timeout: 30
+
+pool:
+  max_processes: 20
+  max_per_agent: 10
+
+security:
+  auth_token: "${ACP_BRIDGE_TOKEN}"   # 或直接填 token 字符串
+  allowed_ips:
+    - "127.0.0.1"
+    # - "<client-ip>"
+
+agents:
+  kiro:
+    enabled: true
+    mode: "acp"
+    command: "kiro-cli"
+    acp_args: ["acp", "--trust-all-tools"]
+    working_dir: "/tmp"
+    description: "Kiro CLI agent"
+  claude:
+    enabled: true
+    mode: "acp"
+    command: "claude-agent-acp"
+    acp_args: []
+    working_dir: "/tmp"
+    description: "Claude Code agent (via ACP adapter)"
+  # legacy-cli:
+  #   enabled: false
+  #   mode: "pty"
+  #   command: "some-old-cli"
+  #   args: ["--non-interactive"]
+  #   working_dir: "/tmp"
+  #   description: "Legacy CLI (no ACP)"
