@@ -235,7 +235,7 @@ Covers: agent listing, sync/streaming calls, multi-turn conversation, Claude, as
 - Idle sessions are cleaned up after TTL expiry
 - `session/request_permission` is auto-replied with `allow_always` (Claude compatibility)
 
-## Security
+## Authentication
 
 - IP allowlist + Bearer Token dual authentication
 - `/health` is unauthenticated (for load balancer probes)
@@ -253,3 +253,11 @@ Covers: agent listing, sync/streaming calls, multi-turn conversation, Claude, as
 | Discord push fails | Wrong or missing `account_id` | Use `default`, not agent name |
 | Discord 500 | Bad target format | DM: `user:<id>`, channel: `channel:<id>` |
 | Job stuck | Agent process anomaly | Auto-marked failed after 10min |
+
+## Security
+
+See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
+
+## License
+
+This library is licensed under the MIT-0 License. See the [LICENSE](LICENSE) file.
