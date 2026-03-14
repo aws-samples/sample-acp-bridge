@@ -163,6 +163,8 @@ export ACP_TOKEN=<your-token>
 
 提交耗时任务，完成后自动推送结果到 Discord。
 
+![异步任务示例](statics/sample-aysnc-job.png)
+
 ### 提交
 
 ```bash

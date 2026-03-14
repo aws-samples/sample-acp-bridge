@@ -162,6 +162,8 @@ export ACP_TOKEN=<your-token>
 
 Submit long-running tasks and get results pushed to Discord automatically.
 
+![Async Job Sample](statics/sample-aysnc-job.png)
+
 ### Submit
 
 ```bash
