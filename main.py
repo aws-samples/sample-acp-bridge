@@ -213,6 +213,27 @@ def main():
         log.info("jobs: monitor=60s stuck_timeout=600s webhook=%s", webhook_cfg.get("url", "(none)"))
     log.info("starting on %s:%s", host, port)
 
+    # Print banner
+    banner = (
+        "\n"
+        "╔══════════════════════════════════════════════════════════════╗\n"
+        "║                                                              ║\n"
+        "║     _   ___ ___   ___      _    _                            ║\n"
+        "║    /_\\ / __| _ \\ | _ )_ __(_)__| |__ _  ___                  ║\n"
+        "║   / _ \\ (__| _/  | _ \\ '_|| / _` / _` |/ -_)                 ║\n"
+        "║  /_/ \\_\\___|_|   |___/|_| |_\\__,_\\__, \\___|                  ║\n"
+        "║                                   |___/                      ║\n"
+        "╠══════════════════════════════════════════════════════════════╣\n"
+        "║                                                              ║\n"
+        "║    🤖 Kiro ───┐                                              ║\n"
+        "║                ├──► acp 🌉 ──► 🦞 OpenClaw ──► 🌍 world     ║\n"
+        "║    🤖 Claude ──┘                                             ║\n"
+        "║                                                              ║\n"
+       f"║          v{_VERSION}  http://{host}:{port}                    ║\n"
+        "╚══════════════════════════════════════════════════════════════╝\n"
+    )
+    print(banner)
+
     # Safety net: kill all agent process groups on exit, even if lifespan doesn't run
     import atexit, signal as _sig
     def _kill_all():
