@@ -5,9 +5,12 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 log = logging.getLogger("acp-bridge.acp_client")
+
+_VERSION = (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
 
 
 class AcpError(Exception):
@@ -120,7 +123,7 @@ class AcpConnection:
         result = await self._send_request("initialize", {
             "protocolVersion": 1,
             "clientCapabilities": {},
-            "clientInfo": {"name": "acp-bridge", "version": "0.2.0"},
+            "clientInfo": {"name": "acp-bridge", "version": _VERSION},
         })
         log.info("initialized: agent=%s version=%s",
                  result.get("agentInfo", {}).get("name"),

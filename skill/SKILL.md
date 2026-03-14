@@ -1,6 +1,6 @@
 ---
 name: acp-bridge-caller
-description: "v0.3.0 — Call remote CLI agents via ACP Bridge (https://github.com/xiwan/acp-bridge/) HTTP API. Usage: /cli <prompt> | /cli ko <prompt> (kiro) | /cli cc <prompt> (claude)"
+description: "v0.5.0 — Call remote CLI agents via ACP Bridge (https://github.com/xiwan/acp-bridge/) HTTP API. Usage: /cli <prompt> | /cli ko <prompt> (kiro) | /cli cc <prompt> (claude)"
 ---
 
 # ACP Bridge Caller — Invoke Remote CLI Agents
