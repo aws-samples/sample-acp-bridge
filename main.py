@@ -18,6 +18,8 @@ from src.agents import make_acp_agent_handler, make_pty_agent_handler
 from src.jobs import JobManager
 from src.security import SecurityMiddleware
 
+_VERSION = open(os.path.join(os.path.dirname(__file__), "VERSION")).read().strip()
+
 log = logging.getLogger("acp-bridge")
 
 
@@ -152,19 +154,28 @@ def main():
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "uptime": int(time.time() - start_time)}
+        return {"status": "ok", "version": _VERSION, "uptime": int(time.time() - start_time)}
 
     @app.get("/health/agents")
     async def health_agents():
         stats = pool.stats if pool else {"by_agent": {}}
         agent_list = []
         for name, cfg in agents_cfg.items():
+            alive = stats["by_agent"].get(name, 0)
+            # Check if agent processes are actually responsive
+            healthy = True
+            if pool:
+                for (a, sid), conn in pool._connections.items():
+                    if a == name and not conn.alive:
+                        healthy = False
+                        break
             agent_list.append({
                 "name": name,
                 "mode": cfg.get("mode", "pty"),
-                "alive_sessions": stats["by_agent"].get(name, 0),
+                "alive_sessions": alive,
+                "healthy": healthy,
             })
-        return {"agents": agent_list}
+        return {"version": _VERSION, "agents": agent_list}
 
     if pool:
         @app.delete("/sessions/{agent}/{session_id}")

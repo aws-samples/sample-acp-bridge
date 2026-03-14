@@ -46,6 +46,7 @@ while [[ $# -gt 0 ]]; do
         --job-status) JOB_STATUS="$2"; shift 2 ;;
         --retries)    MAX_RETRIES="$2"; shift 2 ;;
         -h|--help)    sed -n '2,17s/^# //p' "$0"; exit 0 ;;
+        -V|--version) _vf="$(cd "$(dirname "$0")/.." && cat VERSION 2>/dev/null)"; echo "acp-client ${_vf:-unknown}"; exit 0 ;;
         *) break ;;
     esac
 done
