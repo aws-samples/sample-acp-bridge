@@ -213,6 +213,17 @@ def main():
         log.info("jobs: monitor=60s stuck_timeout=600s webhook=%s", webhook_cfg.get("url", "(none)"))
     log.info("starting on %s:%s", host, port)
 
+    # Safety net: kill all agent process groups on exit, even if lifespan doesn't run
+    import atexit, signal as _sig
+    def _kill_all():
+        if pool:
+            for (a, s), conn in list(pool._connections.items()):
+                try:
+                    os.killpg(conn.proc.pid, _sig.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+    atexit.register(_kill_all)
+
     uvicorn.run(app, host=host, port=port, log_level="debug" if args.verbose else "info",
                 timeout_graceful_shutdown=shutdown_timeout)
 

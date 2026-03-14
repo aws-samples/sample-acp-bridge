@@ -3,6 +3,8 @@
 import asyncio
 import json
 import logging
+import os
+import signal
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -200,7 +202,10 @@ class AcpConnection:
 
     async def kill(self) -> None:
         if self.alive:
-            self.proc.kill()
+            try:
+                os.killpg(self.proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                self.proc.kill()
             await self.proc.wait()
         if self._reader_task and not self._reader_task.done():
             self._reader_task.cancel()
@@ -258,6 +263,7 @@ class AcpProcessPool:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            start_new_session=True,  # create process group so we can kill the whole tree
         )
 
         conn = AcpConnection(agent=agent, session_id=session_id, proc=proc, verbose=self._verbose)
