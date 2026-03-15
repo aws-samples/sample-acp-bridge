@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import os
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -10,6 +12,8 @@ import httpx
 
 from .acp_client import AcpError, AcpProcessPool, PoolExhaustedError
 from .sse import transform_notification
+
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\[\?25[hl]")
 
 log = logging.getLogger("acp-bridge.jobs")
 
@@ -46,8 +50,10 @@ class Job:
 
 
 class JobManager:
-    def __init__(self, pool: AcpProcessPool, webhook_url: str = "", webhook_token: str = ""):
+    def __init__(self, pool: AcpProcessPool | None = None, pty_configs: dict | None = None,
+                 webhook_url: str = "", webhook_token: str = ""):
         self._pool = pool
+        self._pty_configs = pty_configs or {}
         self._jobs: dict[str, Job] = {}
         self._webhook_url = webhook_url
         self._webhook_token = webhook_token
@@ -72,6 +78,17 @@ class JobManager:
 
     async def _run(self, job: Job):
         job.status = "running"
+        if job.agent in self._pty_configs:
+            await self._run_pty(job)
+        else:
+            await self._run_acp(job)
+        job.completed_at = time.time()
+        log.info("job_done: job=%s status=%s len=%d duration=%.1fs",
+                 job.job_id, job.status, len(job.result), job.completed_at - job.created_at)
+        if job.callback_url:
+            await self._webhook(job)
+
+    async def _run_acp(self, job: Job):
         parts = []
         try:
             conn = await self._pool.get_or_create(job.agent, job.session_id)
@@ -99,14 +116,41 @@ class JobManager:
             job.error = str(e)
             job.status = "failed"
             self._pool.remove(job.agent, job.session_id)
-
         job.result = "".join(parts)
-        job.completed_at = time.time()
-        log.info("job_done: job=%s status=%s len=%d duration=%.1fs",
-                 job.job_id, job.status, len(job.result), job.completed_at - job.created_at)
 
-        if job.callback_url:
-            await self._webhook(job)
+    async def _run_pty(self, job: Job):
+        cfg = self._pty_configs[job.agent]
+        command = cfg["command"]
+        args = cfg.get("args", [])
+        env = os.environ.copy()
+        env.update({"TERM": "dumb", "NO_COLOR": "1", "LANG": "en_US.UTF-8"})
+        env.update(cfg.get("env", {}))
+        parts = []
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                command, *args, job.prompt,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                stdin=asyncio.subprocess.DEVNULL,
+                cwd=cfg.get("working_dir", "/tmp"),
+                env=env,
+            )
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                text = ANSI_RE.sub("", line.decode()).rstrip("\n")
+                if text:
+                    parts.append(text + "\n")
+            await proc.wait()
+            job.status = "completed" if proc.returncode == 0 else "failed"
+            if proc.returncode != 0:
+                stderr = (await proc.stderr.read()).decode().strip()
+                job.error = stderr or f"exit code {proc.returncode}"
+        except Exception as e:
+            job.error = str(e)
+            job.status = "failed"
+        job.result = "".join(parts)
 
     async def _webhook(self, job: Job):
         url = job.callback_url

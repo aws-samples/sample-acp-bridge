@@ -101,11 +101,13 @@ def main():
 
     # Job manager for async mode
     webhook_cfg = config.get("webhook", {})
+    pty_agents = {k: v for k, v in agents_cfg.items() if v.get("mode") != "acp"}
     job_mgr = JobManager(
         pool=pool,
+        pty_configs=pty_agents,
         webhook_url=webhook_cfg.get("url", ""),
         webhook_token=webhook_cfg.get("token", ""),
-    ) if pool else None
+    ) if (pool or pty_agents) else None
 
     class JobRequest(BaseModel):
         agent_name: str

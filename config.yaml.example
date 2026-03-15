@@ -29,10 +29,17 @@ agents:
     acp_args: []
     working_dir: "/tmp"
     description: "Claude Code agent (via ACP adapter)"
-  # legacy-cli:
-  #   enabled: false
-  #   mode: "pty"
-  #   command: "some-old-cli"
-  #   args: ["--non-interactive"]
-  #   working_dir: "/tmp"
-  #   description: "Legacy CLI (no ACP)"
+  codex:
+    enabled: true
+    mode: "pty"
+    command: "codex"
+    args: ["exec", "--full-auto", "--skip-git-repo-check"]
+    working_dir: "/tmp"
+    description: "OpenAI Codex CLI agent"
+    env:
+      LITELLM_API_KEY: "${LITELLM_API_KEY}"   # LiteLLM proxy auth token
+
+# webhook (optional): async job completion callback
+# webhook:
+#   url: "http://<openclaw-ip>:18789/tools/invoke"
+#   token: "<OPENCLAW_GATEWAY_TOKEN>"
