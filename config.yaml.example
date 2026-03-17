@@ -20,6 +20,8 @@ security:
 litellm:
   url: "http://localhost:4000"
   required_by: ["codex"]
+  env:
+    LITELLM_API_KEY: "${LITELLM_API_KEY}"
 
 agents:
   kiro:
@@ -43,8 +45,6 @@ agents:
     args: ["exec", "--full-auto", "--skip-git-repo-check"]
     working_dir: "/tmp"
     description: "OpenAI Codex CLI agent"
-    env:
-      LITELLM_API_KEY: "${LITELLM_API_KEY}"   # LiteLLM proxy auth token
 
 # webhook (optional): async job completion callback
 # webhook:

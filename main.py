@@ -66,6 +66,10 @@ def main():
             resp = httpx.get(f"{litellm_url}/health", timeout=5)
             resp.raise_for_status()
             log.info("litellm: reachable at %s", litellm_url)
+            litellm_env = litellm_cfg.get("env", {})
+            for name in required_by:
+                if name in agents_cfg:
+                    agents_cfg[name].setdefault("env", {}).update(litellm_env)
         except Exception as e:
             log.warning("litellm: unreachable at %s (%s)", litellm_url, e)
             for name in required_by:
