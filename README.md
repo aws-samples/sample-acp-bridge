@@ -173,6 +173,12 @@ security:
   allowed_ips:
     - "127.0.0.1"
 
+litellm:
+  url: "http://localhost:4000"
+  required_by: ["codex"]
+  env:
+    LITELLM_API_KEY: "${LITELLM_API_KEY}"
+
 agents:
   kiro:
     enabled: true
@@ -195,8 +201,6 @@ agents:
     args: ["exec", "--full-auto", "--skip-git-repo-check"]
     working_dir: "/tmp"
     description: "OpenAI Codex CLI agent"
-    env:
-      LITELLM_API_KEY: "sk-litellm-bedrock"
 ```
 
 ## Client Usage
@@ -338,7 +342,7 @@ Covers: agent listing, sync/streaming calls, multi-turn conversation, Claude, Co
 | Discord 500 | Bad target format | DM: `user:<id>`, channel: `channel:<id>` |
 | Job stuck | Agent process anomaly | Auto-marked failed after 10min |
 | Codex: not trusted dir | `/tmp` not a git repo | Add `--skip-git-repo-check` to args |
-| Codex: missing LITELLM_API_KEY | Env var not passed | Add `env.LITELLM_API_KEY` in config |
+| Codex: missing LITELLM_API_KEY | Env var not passed | Set `litellm.env.LITELLM_API_KEY` in config |
 | Codex: unsupported params | Bedrock rejects Codex params | Set `drop_params: true` in LiteLLM config |
 
 ## Security

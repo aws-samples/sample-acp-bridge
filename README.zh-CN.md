@@ -181,6 +181,12 @@ security:
   allowed_ips:
     - "127.0.0.1"
 
+litellm:
+  url: "http://localhost:4000"
+  required_by: ["codex"]
+  env:
+    LITELLM_API_KEY: "${LITELLM_API_KEY}"
+
 agents:
   kiro:
     enabled: true
@@ -203,8 +209,6 @@ agents:
     args: ["exec", "--full-auto", "--skip-git-repo-check"]
     working_dir: "/tmp"
     description: "OpenAI Codex CLI agent"
-    env:
-      LITELLM_API_KEY: "sk-litellm-bedrock"
 ```
 
 ## 客户端调用
@@ -346,5 +350,5 @@ ACP_TOKEN=<token> bash test/test.sh http://127.0.0.1:8001 --only codex
 | Discord 500 | target 格式错误 | DM 用 `user:<id>`，频道用 `channel:<id>` |
 | job 卡住 | agent 进程异常 | 10min 后自动标记 failed |
 | Codex: 不信任目录 | `/tmp` 不是 git repo | 添加 `--skip-git-repo-check` 到 args |
-| Codex: 缺少 LITELLM_API_KEY | 环境变量未传递 | 在 config 中添加 `env.LITELLM_API_KEY` |
+| Codex: 缺少 LITELLM_API_KEY | 环境变量未传递 | 在 config 中设置 `litellm.env.LITELLM_API_KEY` |
 | Codex: 不支持的参数 | Bedrock 拒绝 Codex 参数 | LiteLLM 配置 `drop_params: true` |
