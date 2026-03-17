@@ -44,6 +44,7 @@ A bridge service that exposes local CLI agents (Kiro CLI, Claude Code, [OpenAI C
 - Job monitoring: stuck detection (>10min auto-fail), webhook retry, status stats
 - Auto-reply to `session/request_permission` (prevents Claude from hanging)
 - Bearer Token + IP allowlist dual authentication
+- OpenClaw tools proxy: unified entry point for message/tts/nodes/cron/web_search and more
 - Client is pure bash + jq, zero Python dependency
 
 ## Project Structure
@@ -59,11 +60,14 @@ acp-bridge/
 │   └── security.py      # Security middleware (IP allowlist + Bearer Token)
 ├── skill/
 │   ├── SKILL.md         # Kiro/OpenClaw skill definition
-│   └── acp-client.sh    # Client script (bash + jq)
+│   └── acp-client.sh    # Agent client script (bash + jq)
+├── tools/
+│   └── tools-client.sh  # OpenClaw tools client (debug + integration)
 ├── test/
 │   ├── lib.sh           # Test helpers (assertions, env init)
 │   ├── test.sh          # Full test suite runner
 │   ├── test_common.sh   # Common tests (agent listing, error handling)
+│   ├── test_tools.sh    # OpenClaw tools proxy tests
 │   ├── test_kiro.sh     # Kiro agent tests
 │   ├── test_claude.sh   # Claude agent tests
 │   ├── test_codex.sh    # Codex agent tests
@@ -167,6 +171,8 @@ pool:
 webhook:
   url: "http://<openclaw-ip>:18789/tools/invoke"
   token: "<OPENCLAW_GATEWAY_TOKEN>"
+  account_id: "default"
+  discord_target: "channel:<default-channel-id>"
 
 security:
   auth_token: "${ACP_BRIDGE_TOKEN}"
@@ -289,9 +295,73 @@ POST /jobs → Bridge executes in background → On completion POST to OpenClaw 
 | POST | `/jobs` | Submit async job | Yes |
 | GET | `/jobs` | List all jobs + stats | Yes |
 | GET | `/jobs/{job_id}` | Query single job | Yes |
+| GET | `/tools` | List available OpenClaw tools | Yes |
+| POST | `/tools/invoke` | Invoke an OpenClaw tool (proxy) | Yes |
 | GET | `/health` | Health check | No |
 | GET | `/health/agents` | Agent status | Yes |
 | DELETE | `/sessions/{agent}/{session_id}` | Close session | Yes |
+
+## OpenClaw Tools Proxy
+
+ACP Bridge proxies OpenClaw's tool system, giving you a unified entry point for both agent calls and tool invocations.
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `message` | Send messages across Discord/Telegram/Slack/WhatsApp/Signal/iMessage |
+| `tts` | Convert text to speech |
+| `web_search` | Search the web |
+| `web_fetch` | Fetch and extract content from a URL |
+| `nodes` | Control paired devices (notify, run commands, camera) |
+| `cron` | Manage scheduled jobs |
+| `gateway` | Gateway config and restart |
+| `image` | Analyze an image with AI |
+| `browser` | Control browser (open, screenshot, navigate) |
+
+### Client Usage
+
+```bash
+# List available tools
+./tools/tools-client.sh -l
+
+# Send a Discord message
+./tools/tools-client.sh message send \
+  --arg channel=discord \
+  --arg target="channel:123456" \
+  --arg message="Hello from ACP Bridge"
+
+# Text to speech
+./tools/tools-client.sh tts "Today's build passed"
+
+# Web search
+./tools/tools-client.sh web_search "Python 3.13 new features"
+
+# Notify a Mac
+./tools/tools-client.sh nodes notify \
+  --arg node="office-mac" \
+  --arg title="Deploy done" \
+  --arg body="v1.2.3 is live"
+```
+
+### Direct API
+
+```bash
+curl -X POST http://<bridge>:8001/tools/invoke \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tool": "message",
+    "action": "send",
+    "args": {
+      "channel": "discord",
+      "target": "channel:123456",
+      "message": "Hello from ACP Bridge"
+    }
+  }'
+```
+
+Requires `webhook.url` to be configured pointing to an OpenClaw Gateway.
 
 ## Testing
 

@@ -126,6 +126,8 @@ def main():
 
     # Job manager for async mode
     webhook_cfg = config.get("webhook", {})
+    webhook_account_id = webhook_cfg.get("account_id", "")
+    webhook_discord_target = webhook_cfg.get("discord_target", "")
     pty_agents = {k: v for k, v in agents_cfg.items() if v.get("mode") != "acp"}
     job_mgr = JobManager(
         pool=pool,
@@ -151,6 +153,10 @@ def main():
         meta = req.callback_meta
         if req.discord_target:
             meta["discord_target"] = req.discord_target
+        elif webhook_discord_target and "discord_target" not in meta:
+            meta["discord_target"] = webhook_discord_target
+        if webhook_account_id and "account_id" not in meta:
+            meta["account_id"] = webhook_account_id
         job = job_mgr.submit(req.agent_name, sid, req.prompt,
                              req.callback_url, meta)
         return {"job_id": job.job_id, "status": job.status, "agent": job.agent, "session_id": sid}
@@ -207,6 +213,64 @@ def main():
             })
         return {"version": _VERSION, "agents": agent_list}
 
+    # --- OpenClaw tool proxy ---
+    _openclaw_url = webhook_cfg.get("url", "")  # e.g. http://host:18789/tools/invoke
+    _openclaw_token = webhook_cfg.get("token", "")
+    _openclaw_base = _openclaw_url.replace("/tools/invoke", "") if _openclaw_url else ""
+
+    class ToolInvokeRequest(BaseModel):
+        tool: str
+        action: str = ""
+        args: dict = {}
+
+    @app.post("/tools/invoke")
+    async def tools_invoke(req: ToolInvokeRequest):
+        if not _openclaw_url:
+            return JSONResponse({"error": "webhook.url not configured"}, status_code=503)
+        import httpx
+        headers = {"Content-Type": "application/json"}
+        if _openclaw_token:
+            headers["Authorization"] = f"Bearer {_openclaw_token}"
+        # Inject default accountId if not provided
+        args = req.args
+        if webhook_account_id and "accountId" not in args:
+            args = {**args, "accountId": webhook_account_id}
+        payload: dict = {"tool": req.tool, "args": args}
+        if req.action:
+            payload["action"] = req.action
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(_openclaw_url, json=payload, headers=headers)
+                return JSONResponse(resp.json(), status_code=resp.status_code)
+        except Exception as e:
+            log.error("tools_invoke_failed: tool=%s error=%s", req.tool, e)
+            return JSONResponse({"error": str(e)}, status_code=502)
+
+    @app.get("/tools")
+    async def list_tools():
+        """List available OpenClaw tools (known set)."""
+        tools = [
+            {"name": "message", "description": "Send messages across Discord/Telegram/Slack/WhatsApp/Signal/iMessage/MS Teams",
+             "actions": ["send", "react", "edit", "delete", "pin", "search", "poll", "thread-create", "thread-reply"]},
+            {"name": "tts", "description": "Convert text to speech audio",
+             "actions": []},
+            {"name": "web_search", "description": "Search the web",
+             "actions": []},
+            {"name": "web_fetch", "description": "Fetch and extract content from a URL",
+             "actions": []},
+            {"name": "nodes", "description": "Control paired devices (notify, run commands, camera, screen)",
+             "actions": ["status", "notify", "run", "camera_snap", "camera_clip", "screen_record", "location_get"]},
+            {"name": "cron", "description": "Manage scheduled jobs",
+             "actions": ["status", "list", "add", "update", "remove", "run"]},
+            {"name": "gateway", "description": "Gateway config and restart",
+             "actions": ["restart", "config.get", "config.apply", "config.patch"]},
+            {"name": "image", "description": "Analyze an image with AI",
+             "actions": []},
+            {"name": "browser", "description": "Control browser (open, screenshot, navigate)",
+             "actions": ["status", "open", "screenshot", "snapshot", "navigate"]},
+        ]
+        return {"tools": tools, "openclaw_url": _openclaw_base or "(not configured)"}
+
     if pool:
         @app.delete("/sessions/{agent}/{session_id}")
         async def delete_session(agent: str = PathParam(...), session_id: str = PathParam(...)):
@@ -242,6 +306,8 @@ def main():
     log.info("auth_token=%s", auth_token[:8] + "..." if len(auth_token) > 8 else auth_token)
     if job_mgr:
         log.info("jobs: monitor=60s stuck_timeout=600s webhook=%s", webhook_cfg.get("url", "(none)"))
+    if _openclaw_url:
+        log.info("tools_proxy: openclaw=%s", _openclaw_base)
     log.info("starting on %s:%s", host, port)
 
     # Print banner
@@ -257,8 +323,8 @@ def main():
         "╠══════════════════════════════════════════════════════════════╣\n"
         "║                                                              ║\n"
         "║    🤖 Kiro ───┐                                              ║\n"
-        "║                ├──► acp 🌉 ──► 🦞 OpenClaw ──► 🌍 world     ║\n"
-        "║    🤖 Claude ──┘                                             ║\n"
+        "║    🤖 Claude ──┼──► acp 🌉 ──► 🦞 OpenClaw ──► 🌍 world     ║\n"
+        "║    🤖 Codex ──┘                                              ║\n"
         "║                                                              ║\n"
        f"║          v{_VERSION}  http://{host}:{port}                    ║\n"
         "╚══════════════════════════════════════════════════════════════╝\n"

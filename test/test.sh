@@ -41,6 +41,7 @@ echo "║   Bridge: $ACP_BRIDGE_URL"
 echo "╚══════════════════════════════════╝"
 
 run_suite "$TEST_DIR/test_common.sh"
+run_suite "$TEST_DIR/test_tools.sh"
 run_suite "$TEST_DIR/test_kiro.sh"
 run_suite "$TEST_DIR/test_claude.sh"
 run_suite "$TEST_DIR/test_codex.sh"

@@ -52,6 +52,7 @@
 - Job 监控：卡住检测（>10min 自动标记失败）、webhook 重试、状态统计
 - 自动回复 `session/request_permission`（claude 不卡住）
 - Bearer Token + IP 白名单双重认证
+- OpenClaw tools 代理：统一入口调用 message/tts/nodes/cron/web_search 等
 - 客户端纯 bash + jq，零 python 依赖
 
 ## 项目结构
@@ -67,11 +68,14 @@ acp-bridge/
 │   └── security.py      # 安全中间件（IP 白名单 + Bearer Token）
 ├── skill/
 │   ├── SKILL.md         # Kiro/OpenClaw skill 定义
-│   └── acp-client.sh    # 客户端调用脚本（bash + jq）
+│   └── acp-client.sh    # Agent 客户端脚本（bash + jq）
+├── tools/
+│   └── tools-client.sh  # OpenClaw tools 客户端（调试 + 集成）
 ├── test/
 │   ├── lib.sh           # 测试公共库（断言函数、环境初始化）
 │   ├── test.sh          # 全量测试入口
 │   ├── test_common.sh   # 公共测试（agent 列表、错误处理）
+│   ├── test_tools.sh    # OpenClaw tools 代理测试
 │   ├── test_kiro.sh     # Kiro agent 测试
 │   ├── test_claude.sh   # Claude agent 测试
 │   ├── test_codex.sh    # Codex agent 测试
@@ -175,6 +179,8 @@ pool:
 webhook:
   url: "http://<openclaw-ip>:18789/tools/invoke"
   token: "<OPENCLAW_GATEWAY_TOKEN>"
+  account_id: "default"
+  discord_target: "channel:<default-channel-id>"
 
 security:
   auth_token: "${ACP_BRIDGE_TOKEN}"
@@ -297,9 +303,73 @@ POST /jobs → Bridge 后台执行 → 完成后 POST OpenClaw /tools/invoke
 | POST | `/jobs` | 提交异步任务 | 需要 |
 | GET | `/jobs` | 列出所有 job + 统计 | 需要 |
 | GET | `/jobs/{job_id}` | 查询单个 job | 需要 |
+| GET | `/tools` | 列出可用 OpenClaw tools | 需要 |
+| POST | `/tools/invoke` | 调用 OpenClaw tool（代理） | 需要 |
 | GET | `/health` | 健康检查 | 不需要 |
 | GET | `/health/agents` | agent 状态 | 需要 |
 | DELETE | `/sessions/{agent}/{session_id}` | 关闭 session | 需要 |
+
+## OpenClaw Tools 代理
+
+ACP Bridge 代理 OpenClaw 的 tool 系统，提供统一入口同时调用 agent 和 tool。
+
+### 可用 Tools
+
+| Tool | 说明 |
+|------|------|
+| `message` | 跨渠道发消息（Discord/Telegram/Slack/WhatsApp/Signal/iMessage） |
+| `tts` | 文字转语音 |
+| `web_search` | 搜索网页 |
+| `web_fetch` | 抓取网页内容 |
+| `nodes` | 控制配对设备（通知、执行命令、摄像头） |
+| `cron` | 管理定时任务 |
+| `gateway` | Gateway 配置和重启 |
+| `image` | AI 图片分析 |
+| `browser` | 控制浏览器（打开、截图、导航） |
+
+### 客户端调用
+
+```bash
+# 列出可用 tools
+./tools/tools-client.sh -l
+
+# 发送 Discord 消息
+./tools/tools-client.sh message send \
+  --arg channel=discord \
+  --arg target="channel:123456" \
+  --arg message="Hello from ACP Bridge"
+
+# 文字转语音
+./tools/tools-client.sh tts "今天构建通过了"
+
+# 搜索
+./tools/tools-client.sh web_search "Python 3.13 新特性"
+
+# 给 Mac 发通知
+./tools/tools-client.sh nodes notify \
+  --arg node="office-mac" \
+  --arg title="部署完成" \
+  --arg body="v1.2.3 已上线"
+```
+
+### 直接 API 调用
+
+```bash
+curl -X POST http://<bridge>:8001/tools/invoke \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tool": "message",
+    "action": "send",
+    "args": {
+      "channel": "discord",
+      "target": "channel:123456",
+      "message": "Hello from ACP Bridge"
+    }
+  }'
+```
+
+需要在 `config.yaml` 中配置 `webhook.url` 指向 OpenClaw Gateway。
 
 ## 测试
 
