@@ -129,11 +129,13 @@ def main():
     webhook_account_id = webhook_cfg.get("account_id", "")
     webhook_default_target = webhook_cfg.get("target", webhook_cfg.get("discord_target", ""))
     pty_agents = {k: v for k, v in agents_cfg.items() if v.get("mode") != "acp"}
+    base_url = srv_cfg.get("base_url", f"http://{host}:{port}")
     job_mgr = JobManager(
         pool=pool,
         pty_configs=pty_agents,
         webhook_url=webhook_cfg.get("url", ""),
         webhook_token=webhook_cfg.get("token", ""),
+        base_url=base_url,
     ) if (pool or pty_agents) else None
 
     class JobRequest(BaseModel):
@@ -175,6 +177,16 @@ def main():
         if not job:
             return JSONResponse({"error": "job not found"}, status_code=404)
         return job.to_dict()
+
+    @app.get("/jobs/{job_id}/result")
+    async def get_job_result(job_id: str = PathParam(...)):
+        if not job_mgr:
+            return JSONResponse({"error": "no pool configured"}, status_code=500)
+        job = job_mgr.get(job_id)
+        if not job:
+            return JSONResponse({"error": "job not found"}, status_code=404)
+        from starlette.responses import Response
+        return Response(content=job.result or "", media_type="text/markdown; charset=utf-8")
 
     @app.get("/jobs")
     async def list_jobs():

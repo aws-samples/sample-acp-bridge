@@ -42,7 +42,7 @@ class JobFormatter:
 
     text_limit: int = 1900
 
-    def format(self, job: Job, target: str) -> list[dict]:
+    def format(self, job: Job, target: str, base_url: str = "") -> list[dict]:
         raise NotImplementedError
 
 
@@ -50,8 +50,9 @@ class DiscordFormatter(JobFormatter):
     """Discord: summary card + body chunks (2000 char limit)."""
 
     text_limit: int = 1900
+    chunk_threshold: int = 2
 
-    def format(self, job: Job, target: str) -> list[dict]:
+    def format(self, job: Job, target: str, base_url: str = "") -> list[dict]:
         dur = _duration(job)
         payloads = []
 
@@ -68,15 +69,23 @@ class DiscordFormatter(JobFormatter):
         summary.append(f">\n> ⏱️ {dur}s")
         payloads.append(self._msg(target, "\n".join(summary)))
 
-        # 2) Body chunks — wrapped in quote block with header
+        # 2) Body
         if job.status == "completed" and job.result.strip():
             chunks = _split(job.result, self.text_limit - 100)
-            for i, chunk in enumerate(chunks):
-                header = f"📄 **Result** — {job.agent} `{job.job_id[:8]}`"
-                if len(chunks) > 1:
-                    header += f" [{i+1}/{len(chunks)}]"
-                body = "\n".join(f"> {line}" if line else ">" for line in chunk.splitlines())
-                payloads.append(self._msg(target, f"{header}\n{body}"))
+            if len(chunks) > self.chunk_threshold and base_url:
+                # Too long — send preview + link
+                preview = "\n".join(f"> {line}" if line else ">" for line in chunks[0].splitlines())
+                link = f"{base_url}/jobs/{job.job_id}/result"
+                payloads.append(self._msg(target,
+                    f"📄 **Result** — {job.agent} `{job.job_id[:8]}`\n"
+                    f"{preview}\n>\n> ...\n>\n> 📎 [Full result ({len(chunks)} parts)]({link})"))
+            else:
+                for i, chunk in enumerate(chunks):
+                    header = f"📄 **Result** — {job.agent} `{job.job_id[:8]}`"
+                    if len(chunks) > 1:
+                        header += f" [{i+1}/{len(chunks)}]"
+                    body = "\n".join(f"> {line}" if line else ">" for line in chunk.splitlines())
+                    payloads.append(self._msg(target, f"{header}\n{body}"))
 
         return payloads
 
@@ -91,7 +100,7 @@ class FeishuFormatter(JobFormatter):
 
     text_limit: int = 3900
 
-    def format(self, job: Job, target: str) -> list[dict]:
+    def format(self, job: Job, target: str, base_url: str = "") -> list[dict]:
         dur = _duration(job)
         payloads = []
 
@@ -128,7 +137,7 @@ class FeishuFormatter(JobFormatter):
 class FallbackFormatter(JobFormatter):
     """Generic quote-block format (original behavior)."""
 
-    def format(self, job: Job, target: str) -> list[dict]:
+    def format(self, job: Job, target: str, base_url: str = "") -> list[dict]:
         dur = _duration(job)
         header = f"📨 **ACP Bridge** — {job.agent} `{job.job_id}`\n>"
 

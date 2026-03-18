@@ -53,12 +53,13 @@ class Job:
 
 class JobManager:
     def __init__(self, pool: AcpProcessPool | None = None, pty_configs: dict | None = None,
-                 webhook_url: str = "", webhook_token: str = ""):
+                 webhook_url: str = "", webhook_token: str = "", base_url: str = ""):
         self._pool = pool
         self._pty_configs = pty_configs or {}
         self._jobs: dict[str, Job] = {}
         self._webhook_url = webhook_url
         self._webhook_token = webhook_token
+        self._base_url = base_url
 
     def submit(self, agent: str, session_id: str, prompt: str,
                callback_url: str = "", callback_meta: dict | None = None,
@@ -175,7 +176,7 @@ class JobManager:
             payloads = [self._format_discord_embed(job)]
         elif target:
             formatter = get_formatter(channel)
-            payloads = formatter.format(job, target)
+            payloads = formatter.format(job, target, base_url=self._base_url)
         else:
             payloads = [{**job.to_dict(), **job.callback_meta}]
 
