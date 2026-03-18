@@ -152,7 +152,7 @@ def main():
         if not job_mgr:
             return JSONResponse({"error": "no pool configured"}, status_code=500)
         import uuid as _uuid
-        sid = req.session_id or str(_uuid.uuid4())
+        sid = req.session_id or str(_uuid.uuid5(_uuid.NAMESPACE_DNS, req.agent_name))
         meta = req.callback_meta
         effective_target = req.target or req.discord_target
         if effective_target:
@@ -299,6 +299,7 @@ def main():
             if pool:
                 await pool.health_check()
                 await pool.cleanup_idle(ttl_hours * 3600)
+                pool.cleanup_ghosts()
             if job_mgr:
                 job_mgr.cleanup()
 

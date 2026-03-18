@@ -29,7 +29,7 @@ def make_acp_agent_handler(agent_name: str, pool: AcpProcessPool):
         input: list[Message], context: Context
     ) -> AsyncGenerator[RunYield, RunYieldResume]:
         prompt = "".join(part.content for msg in input for part in msg.parts if part.content)
-        session_id = str(context.session.id) if context.session else str(uuid.uuid4())
+        session_id = str(context.session.id) if context.session else str(uuid.uuid5(uuid.NAMESPACE_DNS, agent_name))
         # Extract cwd from first message part metadata
         cwd = ""
         for msg in input:
