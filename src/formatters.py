@@ -68,12 +68,15 @@ class DiscordFormatter(JobFormatter):
         summary.append(f">\n> ⏱️ {dur}s")
         payloads.append(self._msg(target, "\n".join(summary)))
 
-        # 2) Body chunks
+        # 2) Body chunks — wrapped in quote block with header
         if job.status == "completed" and job.result.strip():
-            chunks = _split(job.result, self.text_limit)
+            chunks = _split(job.result, self.text_limit - 100)
             for i, chunk in enumerate(chunks):
-                prefix = f"**[{i+1}/{len(chunks)}]**\n" if len(chunks) > 1 else ""
-                payloads.append(self._msg(target, prefix + chunk))
+                header = f"📄 **Result** — {job.agent} `{job.job_id[:8]}`"
+                if len(chunks) > 1:
+                    header += f" [{i+1}/{len(chunks)}]"
+                body = "\n".join(f"> {line}" for line in chunk.splitlines())
+                payloads.append(self._msg(target, f"{header}\n{body}"))
 
         return payloads
 
