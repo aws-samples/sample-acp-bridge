@@ -28,6 +28,7 @@ STREAM=false
 CARD=false
 ASYNC=false
 JOB_STATUS=""
+CWD=""
 MAX_RETRIES="${ACP_RETRIES:-2}"
 CONNECT_TIMEOUT=10
 SYNC_TIMEOUT="${ACP_TIMEOUT:-300}"
@@ -43,6 +44,7 @@ while [[ $# -gt 0 ]]; do
         --stream)     STREAM=true; shift ;;
         --card)       CARD=true; shift ;;
         --async)      ASYNC=true; shift ;;
+        --cwd)        CWD="$2"; shift 2 ;;
         --job-status) JOB_STATUS="$2"; shift 2 ;;
         --retries)    MAX_RETRIES="$2"; shift 2 ;;
         -h|--help)    sed -n '2,17s/^# //p' "$0"; exit 0 ;;
@@ -99,8 +101,10 @@ PAYLOAD=$(jq -n \
     --arg session "$SESSION" \
     --arg prompt "$PROMPT" \
     --arg mode "$MODE" \
+    --arg cwd "$CWD" \
     '{agent_name: $agent, session_id: $session,
-      input: [{parts: [{content: $prompt, content_type: "text/plain"}]}]}
+      input: [{parts: [{content: $prompt, content_type: "text/plain"}
+              + (if $cwd != "" then {metadata: {cwd: $cwd}} else {} end)]}]}
       + (if $mode == "stream" then {mode: "stream"} else {} end)')
 
 # --- Async 模式：提交任务立即返回 ---
@@ -109,7 +113,9 @@ if $ASYNC; then
         --arg agent "$AGENT" \
         --arg session "$SESSION" \
         --arg prompt "$PROMPT" \
-        '{agent_name: $agent, session_id: $session, prompt: $prompt}')
+        --arg cwd "$CWD" \
+        '{agent_name: $agent, session_id: $session, prompt: $prompt}
+         + (if $cwd != "" then {cwd: $cwd} else {} end)')
     resp=$(curl -sf --connect-timeout "$CONNECT_TIMEOUT" --max-time 30 \
         -X POST "${AUTH[@]}" "$URL/jobs" \
         -H "Content-Type: application/json" \

@@ -255,7 +255,7 @@ class AcpProcessPool:
     def _count_agent(self, agent: str) -> int:
         return sum(1 for (a, _) in self._connections if a == agent)
 
-    async def get_or_create(self, agent: str, session_id: str) -> AcpConnection:
+    async def get_or_create(self, agent: str, session_id: str, cwd: str = "") -> AcpConnection:
         key = (agent, session_id)
         conn = self._connections.get(key)
 
@@ -276,14 +276,14 @@ class AcpProcessPool:
         if not agent_cfg:
             raise AcpError(f"agent not found: {agent}")
 
-        conn = await self._spawn(agent, session_id, agent_cfg, is_rebuild=is_rebuild)
+        conn = await self._spawn(agent, session_id, agent_cfg, is_rebuild=is_rebuild, cwd_override=cwd)
         self._connections[key] = conn
         return conn
 
-    async def _spawn(self, agent: str, session_id: str, cfg: dict, is_rebuild: bool = False) -> AcpConnection:
+    async def _spawn(self, agent: str, session_id: str, cfg: dict, is_rebuild: bool = False, cwd_override: str = "") -> AcpConnection:
         command = cfg["command"]
         acp_args = cfg.get("acp_args", ["acp"])
-        cwd = cfg.get("working_dir", "/tmp")
+        cwd = cwd_override or cfg.get("working_dir", "/tmp")
 
         log.info("spawning: agent=%s session=%s cmd=%s %s rebuild=%s", agent, session_id, command, acp_args, is_rebuild)
         proc = await asyncio.create_subprocess_exec(

@@ -25,6 +25,7 @@ class Job:
     agent: str
     session_id: str
     prompt: str
+    cwd: str = ""
     status: str = "pending"
     result: str = ""
     error: str = ""
@@ -60,9 +61,11 @@ class JobManager:
         self._webhook_token = webhook_token
 
     def submit(self, agent: str, session_id: str, prompt: str,
-               callback_url: str = "", callback_meta: dict | None = None) -> Job:
+               callback_url: str = "", callback_meta: dict | None = None,
+               cwd: str = "") -> Job:
         job = Job(
             job_id=str(uuid.uuid4()), agent=agent, session_id=session_id, prompt=prompt,
+            cwd=cwd,
             callback_url=callback_url or self._webhook_url,
             callback_meta=callback_meta or {},
         )
@@ -92,7 +95,7 @@ class JobManager:
     async def _run_acp(self, job: Job):
         parts = []
         try:
-            conn = await self._pool.get_or_create(job.agent, job.session_id)
+            conn = await self._pool.get_or_create(job.agent, job.session_id, cwd=job.cwd)
             async for notification in conn.session_prompt(job.prompt):
                 if "_prompt_result" in notification:
                     if "error" in notification["_prompt_result"]:
@@ -134,7 +137,7 @@ class JobManager:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 stdin=asyncio.subprocess.DEVNULL,
-                cwd=cfg.get("working_dir", "/tmp"),
+                cwd=job.cwd or cfg.get("working_dir", "/tmp"),
                 env=env,
             )
             while True:

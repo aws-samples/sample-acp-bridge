@@ -135,7 +135,7 @@ echo "--- T3: session/prompt ---"
 
 if [[ -z "$SESSION_ID" ]]; then
     echo "⚠️  跳过 T3（T2 未获得 sessionId）"
-    ((FAIL+=3))
+    ((SKIP+=3))
 else
     prompt_msg=$(jq -cn --arg sid "$SESSION_ID" \
         '{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":$sid,"prompt":[{"type":"text","text":"reply with exactly the word: hello"}]}}')

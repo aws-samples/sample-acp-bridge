@@ -176,7 +176,7 @@ webhook:
   url: "http://<openclaw-ip>:18789/tools/invoke"
   token: "<OPENCLAW_GATEWAY_TOKEN>"
   account_id: "default"
-  discord_target: "channel:<default-channel-id>"
+  target: "channel:<default-channel-id>"        # also accepts feishu targets
 
 security:
   auth_token: "${ACP_BRIDGE_TOKEN}"
@@ -255,10 +255,26 @@ curl -X POST http://<bridge>:8001/jobs \
   -d '{
     "agent_name": "kiro",
     "prompt": "Refactor the module",
-    "discord_target": "user:<user-id>",
+    "target": "user:<user-id>",
+    "channel": "discord",
     "callback_meta": {"account_id": "default"}
   }'
 # → {"job_id": "xxx", "status": "pending"}
+```
+
+#### Feishu Example
+
+```bash
+curl -X POST http://<bridge>:8001/jobs \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_name": "kiro",
+    "prompt": "Analyze the codebase",
+    "target": "user:<feishu-open-id>",
+    "channel": "feishu",
+    "callback_meta": {"account_id": "main"}
+  }'
 ```
 
 ### Query
@@ -272,17 +288,19 @@ curl http://<bridge>:8001/jobs/<job_id> \
 
 ```
 POST /jobs → Bridge executes in background → On completion POST to OpenClaw /tools/invoke
-  → OpenClaw sends to Discord via message tool → User receives result
+  → OpenClaw sends to Discord/Feishu/... via message tool → User receives result
 ```
 
-### discord_target Format
+### target Format
 
 | Scenario | Format | Example |
 |----------|--------|---------|
-| Server channel | `channel:<id>` or `#name` | `channel:1477514611317145732` |
-| DM (direct message) | `user:<user_id>` | `user:<user-id>` |
+| Discord channel | `channel:<id>` or `#name` | `channel:1477514611317145732` |
+| Discord DM | `user:<user_id>` | `user:123456789` |
+| Feishu user | `user:<open_id>` | `user:ou_2dfd02ef...` |
+| Feishu group | `<chat_id>` | `oc_xxx` |
 
-`account_id` refers to the OpenClaw Discord bot account (usually `default`), not the agent name.
+`account_id` refers to the OpenClaw bot account — `default` for Discord, `main` for Feishu (depends on your OpenClaw config).
 
 ### Job Monitoring
 

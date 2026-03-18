@@ -140,6 +140,7 @@ def main():
         agent_name: str
         session_id: str = ""
         prompt: str
+        cwd: str = ""
         callback_url: str = ""
         callback_meta: dict = {}
         target: str = ""
@@ -163,7 +164,7 @@ def main():
         if req.channel:
             meta["channel"] = req.channel
         job = job_mgr.submit(req.agent_name, sid, req.prompt,
-                             req.callback_url, meta)
+                             req.callback_url, meta, cwd=req.cwd)
         return {"job_id": job.job_id, "status": job.status, "agent": job.agent, "session_id": sid}
 
     @app.get("/jobs/{job_id}")
@@ -227,6 +228,8 @@ def main():
         tool: str
         action: str = ""
         args: dict = {}
+        channel: str = ""
+        account_id: str = ""
 
     @app.post("/tools/invoke")
     async def tools_invoke(req: ToolInvokeRequest):
@@ -236,10 +239,18 @@ def main():
         headers = {"Content-Type": "application/json"}
         if _openclaw_token:
             headers["Authorization"] = f"Bearer {_openclaw_token}"
+        # Transparent header forwarding for OpenClaw routing
+        acct = req.account_id or webhook_account_id
+        if acct:
+            headers["x-openclaw-account-id"] = acct
+        if req.channel:
+            headers["x-openclaw-message-channel"] = req.channel
+        elif req.args.get("channel"):
+            headers["x-openclaw-message-channel"] = req.args["channel"]
         # Inject default accountId if not provided
         args = req.args
-        if webhook_account_id and "accountId" not in args:
-            args = {**args, "accountId": webhook_account_id}
+        if acct and "accountId" not in args:
+            args = {**args, "accountId": acct}
         payload: dict = {"tool": req.tool, "args": args}
         if req.action:
             payload["action"] = req.action

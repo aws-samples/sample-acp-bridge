@@ -72,6 +72,9 @@ def handle(msg: dict) -> None:
     # ── session/prompt ───────────────────────────────────────────────────────
     elif method == "session/prompt":
         session_id = params.get("sessionId", "")
+        if session_id not in sessions:
+            send_error(req_id, -32602, f"unknown session: {session_id}")
+            return
         prompt_parts = params.get("prompt", [])
         text = "".join(
             p.get("text", "") for p in prompt_parts if p.get("type") == "text"

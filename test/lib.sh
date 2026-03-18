@@ -8,7 +8,7 @@ TOOLS_CLIENT="$SCRIPT_DIR/tools/tools-client.sh"
 export ACP_BRIDGE_URL="${ACP_BRIDGE_URL:-http://127.0.0.1:8001}"
 export ACP_RETRIES=1
 
-PASS=0 FAIL=0
+PASS=0 FAIL=0 SKIP=0
 
 run_test() {
     local name="$1" expect="$2" actual="$3"
@@ -38,6 +38,9 @@ expect_fail() {
 print_summary() {
     local label="${1:-测试}"
     echo ""
-    echo "=== $label: $PASS 通过, $FAIL 失败 ==="
+    local msg="=== $label: $PASS 通过, $FAIL 失败"
+    [[ $SKIP -gt 0 ]] && msg+=", $SKIP 跳过"
+    msg+=" ==="
+    echo "$msg"
     return $FAIL
 }

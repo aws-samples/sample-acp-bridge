@@ -30,11 +30,20 @@ def make_acp_agent_handler(agent_name: str, pool: AcpProcessPool):
     ) -> AsyncGenerator[RunYield, RunYieldResume]:
         prompt = "".join(part.content for msg in input for part in msg.parts if part.content)
         session_id = str(context.session.id) if context.session else str(uuid.uuid4())
+        # Extract cwd from first message part metadata
+        cwd = ""
+        for msg in input:
+            for part in msg.parts:
+                if part.metadata and part.metadata.get("cwd"):
+                    cwd = part.metadata["cwd"]
+                    break
+            if cwd:
+                break
 
-        log.info("acp_start: agent=%s session=%s len=%d", agent_name, session_id, len(prompt))
+        log.info("acp_start: agent=%s session=%s len=%d cwd=%s", agent_name, session_id, len(prompt), cwd or "(default)")
 
         try:
-            conn = await pool.get_or_create(agent_name, session_id)
+            conn = await pool.get_or_create(agent_name, session_id, cwd=cwd)
         except PoolExhaustedError as e:
             log.error("pool_exhausted: agent=%s: %s", agent_name, e)
             yield Message(parts=[MessagePart(content=f"[error] pool_exhausted: {e}", content_type="text/plain")])
