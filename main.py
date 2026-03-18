@@ -127,7 +127,7 @@ def main():
     # Job manager for async mode
     webhook_cfg = config.get("webhook", {})
     webhook_account_id = webhook_cfg.get("account_id", "")
-    webhook_discord_target = webhook_cfg.get("discord_target", "")
+    webhook_default_target = webhook_cfg.get("target", webhook_cfg.get("discord_target", ""))
     pty_agents = {k: v for k, v in agents_cfg.items() if v.get("mode") != "acp"}
     job_mgr = JobManager(
         pool=pool,
@@ -142,7 +142,9 @@ def main():
         prompt: str
         callback_url: str = ""
         callback_meta: dict = {}
-        discord_target: str = ""
+        target: str = ""
+        discord_target: str = ""  # deprecated, use target
+        channel: str = ""
 
     @app.post("/jobs")
     async def submit_job(req: JobRequest):
@@ -151,12 +153,15 @@ def main():
         import uuid as _uuid
         sid = req.session_id or str(_uuid.uuid4())
         meta = req.callback_meta
-        if req.discord_target:
-            meta["discord_target"] = req.discord_target
-        elif webhook_discord_target and "discord_target" not in meta:
-            meta["discord_target"] = webhook_discord_target
+        effective_target = req.target or req.discord_target
+        if effective_target:
+            meta["target"] = effective_target
+        elif webhook_default_target and "target" not in meta:
+            meta["target"] = webhook_default_target
         if webhook_account_id and "account_id" not in meta:
             meta["account_id"] = webhook_account_id
+        if req.channel:
+            meta["channel"] = req.channel
         job = job_mgr.submit(req.agent_name, sid, req.prompt,
                              req.callback_url, meta)
         return {"job_id": job.job_id, "status": job.status, "agent": job.agent, "session_id": sid}

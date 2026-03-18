@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from .acp_client import AcpError, AcpProcessPool, PoolExhaustedError
+from .formatters import get_formatter
 from .sse import transform_notification
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\[\?25[hl]")
@@ -37,7 +38,7 @@ class Job:
     def to_dict(self) -> dict:
         d = {"job_id": self.job_id, "agent": self.agent, "session_id": self.session_id,
              "status": self.status, "created_at": self.created_at,
-             "discord_target": self.callback_meta.get("discord_target", ""),
+             "target": self.callback_meta.get("target", self.callback_meta.get("discord_target", "")),
              "account_id": self.callback_meta.get("account_id", "")}
         if self.status == "running":
             d["elapsed"] = round(time.time() - self.created_at, 1)
@@ -163,28 +164,33 @@ class JobManager:
 
     async def _webhook(self, job: Job):
         url = job.callback_url
-        is_discord = "discord.com/api/webhooks" in url
+        is_discord_webhook = "discord.com/api/webhooks" in url
+        target = job.callback_meta.get("target", job.callback_meta.get("discord_target", ""))
+        channel = job.callback_meta.get("channel", "discord")
 
-        if is_discord:
-            payloads = [self._format_discord(job)]
+        if is_discord_webhook:
+            payloads = [self._format_discord_embed(job)]
+        elif target:
+            formatter = get_formatter(channel)
+            payloads = formatter.format(job, target)
         else:
-            payloads = self._format_openclaw(job)
+            payloads = [{**job.to_dict(), **job.callback_meta}]
 
         headers = {"Content-Type": "application/json"}
         if self._webhook_token:
             headers["Authorization"] = f"Bearer {self._webhook_token}"
-        if not is_discord:
+        if not is_discord_webhook:
             account_id = job.callback_meta.get("account_id", "")
             if account_id:
                 headers["x-openclaw-account-id"] = account_id
-                headers["x-openclaw-message-channel"] = "discord"
+                headers["x-openclaw-message-channel"] = channel
 
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 for payload in payloads:
                     resp = await client.post(url, json=payload, headers=headers)
-                    log.info("webhook_sent: job=%s target=%s status=%d part=%d/%d",
-                             job.job_id, "discord" if is_discord else "openclaw",
+                    log.info("webhook_sent: job=%s channel=%s status=%d part=%d/%d",
+                             job.job_id, channel,
                              resp.status_code, payloads.index(payload) + 1, len(payloads))
                     if resp.status_code != 200:
                         break
@@ -194,72 +200,11 @@ class JobManager:
             log.error("webhook_failed: job=%s error=%s", job.job_id, e)
 
     @staticmethod
-    def _split_message(text: str, limit: int = 1900) -> list[str]:
-        """Split text into chunks at line boundaries, each <= limit chars."""
-        chunks, current = [], ""
-        for line in text.split("\n"):
-            # +1 for the newline character
-            if current and len(current) + len(line) + 1 > limit:
-                chunks.append(current)
-                current = line
-            else:
-                current = f"{current}\n{line}" if current else line
-        if current:
-            chunks.append(current)
-        return chunks
-
-    @staticmethod
-    def _format_openclaw(job: Job) -> list[dict]:
-        """Format as OpenClaw /tools/invoke payloads, split for Discord 2000-char limit."""
-        target = job.callback_meta.get("discord_target", "")
-        if not target:
-            return [{**job.to_dict(), **job.callback_meta}]
-
-        duration = round(job.completed_at - job.created_at, 1)
-        header = f"📨 **ACP Bridge** — {job.agent} `{job.job_id}`\n>"
-
-        if job.status == "failed":
-            body = f"> ❌ {job.error}"
-        else:
-            lines = []
-            if job.tools:
-                for t in job.tools[:10]:
-                    lines.append(f"> 🔧 `{t}`")
-                lines.append(">")
-            for l in job.result.split("\n"):
-                lines.append(f"> {l}")
-            body = "\n".join(lines)
-
-        footer = f">\n📨 **Done** — {duration}s"
-
-        # Split body into chunks that fit within Discord limit
-        # Reserve space for header (first chunk) and footer (last chunk)
-        chunks = JobManager._split_message(body, limit=1900)
-        total = len(chunks)
-        payloads = []
-        for i, chunk in enumerate(chunks):
-            parts = []
-            if i == 0:
-                parts.append(header)
-            if total > 1:
-                parts.append(f"> **[{i+1}/{total}]**")
-            parts.append(chunk)
-            if i == total - 1:
-                parts.append(footer)
-            msg = "\n".join(parts)
-            payloads.append({
-                "tool": "message",
-                "action": "send",
-                "args": {"channel": "discord", "target": target, "message": msg},
-            })
-        return payloads
-
-    @staticmethod
-    def _format_discord(job: Job) -> dict:
+    def _format_discord_embed(job: Job) -> dict:
+        """Legacy: direct Discord webhook with embed."""
         if job.status == "failed":
             desc = f"❌ {job.error}"
         else:
-            # Discord embed description max 4096 chars
             text = job.result[:3900]
             if len(job.result) > 3900:
                 text += "\n\n_(truncated)_"
