@@ -1,6 +1,6 @@
 ---
 name: acp-bridge-caller
-description: "v0.7.2 — 通过 ACP Bridge HTTP API 调用远程 CLI agent。Usage: /cli <prompt> | /cli ko <prompt> (kiro) | /cli cc <prompt> (claude) | /cli cx <prompt> (codex)"
+description: "v0.7.3 — 通过 ACP Bridge HTTP API 调用远程 CLI agent。Usage: /cli <prompt> | /cli ko <prompt> (kiro) | /cli cc <prompt> (claude) | /cli cx <prompt> (codex)"
 ---
 
 # ACP Bridge Caller — Invoke Remote CLI Agents
@@ -158,13 +158,15 @@ $ACP_CLIENT -s <uuid> "Follow-up question"
 
 ## Async Job Mode
 
-For long-running tasks, submit asynchronously and get results pushed to Discord on completion.
+For long-running tasks, submit asynchronously and get results pushed to Discord or Feishu on completion.
 
 ### Submit an Async Job
 
-Async mode requires Discord callback info. **Call the `/jobs` endpoint directly** — do not use `acp-client.sh --async`.
+Async mode requires callback info. **Call the `/jobs` endpoint directly** — do not use `acp-client.sh --async`.
 
-When an OpenClaw agent receives a Discord message, it can obtain channel and account info from the current session's `deliveryContext`:
+When an OpenClaw agent receives a message, it can obtain channel and account info from the current session's `deliveryContext`:
+
+#### Discord Example
 
 ```bash
 curl -X POST "$ACP_BRIDGE_URL/jobs" \
@@ -173,10 +175,43 @@ curl -X POST "$ACP_BRIDGE_URL/jobs" \
   -d '{
     "agent_name": "<agent>",
     "prompt": "<user prompt>",
-    "discord_target": "<deliveryContext.to>",
+    "target": "<deliveryContext.to>",
+    "channel": "discord",
     "callback_meta": {
       "account_id": "<deliveryContext.accountId>"
     }
+  }'
+```
+
+#### Feishu Example
+
+```bash
+curl -X POST "$ACP_BRIDGE_URL/jobs" \
+  -H "Authorization: Bearer $ACP_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_name": "<agent>",
+    "prompt": "<user prompt>",
+    "target": "user:<feishu-open-id>",
+    "channel": "feishu",
+    "callback_meta": {
+      "account_id": "main"
+    }
+  }'
+```
+
+#### With Custom Working Directory
+
+```bash
+curl -X POST "$ACP_BRIDGE_URL/jobs" \
+  -H "Authorization: Bearer $ACP_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_name": "kiro",
+    "prompt": "Analyze this project",
+    "cwd": "/home/user/projects/my-app",
+    "target": "<target>",
+    "channel": "discord"
   }'
 ```
 
@@ -190,28 +225,29 @@ The agent should immediately reply to the user: "✅ Submitted. Results will be 
 curl -H "Authorization: Bearer $ACP_TOKEN" "$ACP_BRIDGE_URL/jobs/<job_id>"
 ```
 
-### Auto-push to Discord on Completion
+### Auto-push on Completion
 
-When an async job completes, Bridge automatically sends results to the specified Discord channel via OpenClaw Gateway.
+When an async job completes, Bridge automatically sends results to the specified IM channel via OpenClaw Gateway.
 
 **For push to work, the following must be included when submitting:**
 
 | Field | Source | Description |
 |-------|--------|-------------|
-| `discord_target` | `deliveryContext.to` | Server channel: `channel:<id>`, DM: `user:<user_id>` |
-| `callback_meta.account_id` | Discord bot account ID | Usually `default` (not the agent ID) |
+| `target` | `deliveryContext.to` | Discord: `channel:<id>` or `user:<id>`. Feishu: `user:<open_id>` or `<chat_id>` |
+| `channel` | IM platform | `discord`, `feishu`, etc. Defaults to `discord` if omitted |
+| `callback_meta.account_id` | Bot account ID | `default` for Discord, `main` for Feishu (depends on OpenClaw config) |
 
 **Important:**
-- `account_id` is the OpenClaw-configured Discord bot account, usually `default` — not the agent name
-- DM channels cannot use `channel:<dm_channel_id>` — must use `user:<user_id>` format
-- Server channels use `channel:<channel_id>` or `#channel-name`
+- `account_id` is the OpenClaw-configured bot account, usually `default` for Discord, `main` for Feishu — not the agent name
+- Discord DM channels must use `user:<user_id>` format, not `channel:<dm_channel_id>`
+- `discord_target` is still accepted for backward compatibility but `target` is preferred
 
 **Consequences of missing fields:**
 
 | Missing | Result |
 |---------|--------|
-| `discord_target` | Job runs normally but results are not pushed to Discord (webhook payload falls back to raw JSON) |
-| `account_id` | Webhook reaches OpenClaw but lacks bot identity; OpenClaw cannot route to Discord, returns 500 |
+| `target` | Job runs normally but results are not pushed (webhook payload falls back to raw JSON) |
+| `account_id` | Webhook reaches OpenClaw but lacks bot identity; OpenClaw cannot route, returns 500 |
 | Both | Job runs normally; results can only be retrieved via `GET /jobs/{id}` |
 
 ### Monitoring
