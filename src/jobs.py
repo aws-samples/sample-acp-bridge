@@ -97,7 +97,8 @@ class JobManager:
         parts = []
         try:
             conn = await self._pool.get_or_create(job.agent, job.session_id, cwd=job.cwd)
-            async for notification in conn.session_prompt(job.prompt):
+            prompt = job.prompt + "\n\n[IMPORTANT: Output all results as text in your reply. Do not write to files — this is an async job and the user can only see your text output.]"
+            async for notification in conn.session_prompt(prompt):
                 if "_prompt_result" in notification:
                     if "error" in notification["_prompt_result"]:
                         job.error = str(notification["_prompt_result"]["error"])
