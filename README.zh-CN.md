@@ -71,15 +71,22 @@ acp-bridge/
 │   └── acp-client.sh    # Agent 客户端脚本（bash + jq）
 ├── tools/
 │   └── tools-client.sh  # OpenClaw tools 客户端（调试 + 集成）
+├── examples/
+│   └── echo-agent.py    # 最小 ACP 兼容参考 agent
+├── docker/
+│   └── light/           # 轻量 Docker 镜像（仅网关，agent 从宿主机挂载）
 ├── test/
-│   ├── lib.sh           # 测试公共库（断言函数、环境初始化）
-│   ├── test.sh          # 全量测试入口
-│   ├── test_common.sh   # 公共测试（agent 列表、错误处理）
-│   ├── test_tools.sh    # OpenClaw tools 代理测试
-│   ├── test_kiro.sh     # Kiro agent 测试
-│   ├── test_claude.sh   # Claude agent 测试
-│   ├── test_codex.sh    # Codex agent 测试
-│   └── reports/         # 测试报告
+│   ├── lib.sh                     # 测试公共库（断言函数、环境初始化）
+│   ├── test.sh                    # 全量测试入口
+│   ├── test_agent_compliance.sh   # Agent 合规测试（直接 stdio，无需 Bridge）
+│   ├── test_common.sh             # 公共测试（agent 列表、错误处理）
+│   ├── test_tools.sh              # OpenClaw tools 代理测试
+│   ├── test_kiro.sh               # Kiro agent 测试
+│   ├── test_claude.sh             # Claude agent 测试
+│   ├── test_codex.sh              # Codex agent 测试
+│   ├── test_docker.sh             # Docker 镜像测试
+│   └── reports/                   # 测试报告
+├── AGENT_SPEC.md        # ACP agent 集成规范
 ├── config.yaml          # 服务配置
 ├── pyproject.toml
 └── uv.lock
@@ -102,6 +109,30 @@ cp config.yaml.example config.yaml
 uv sync
 uv run main.py
 ```
+
+## Docker 快速开始
+
+轻量 Docker 镜像，仅包含 ACP Bridge 网关。Agent CLI（Kiro、Claude Code、Codex）保留在宿主机上，通过 volume 挂载到容器中。
+
+```bash
+# 1. 准备配置
+cp config.yaml.example config.yaml
+# 编辑 config.yaml
+
+# 2. 设置环境变量
+export ACP_BRIDGE_TOKEN=<your-token>
+
+# 3. 编辑 docker/light/docker-compose.yml
+#    取消注释你已安装的 agent 对应的 volume 挂载
+
+# 4. 构建并运行
+docker compose -f docker/light/docker-compose.yml up -d
+
+# 查看日志
+docker compose -f docker/light/docker-compose.yml logs -f
+```
+
+详见 `docker/light/docker-compose.yml` 中各 agent 的挂载示例。
 
 ## Codex + LiteLLM 配置
 
@@ -373,6 +404,20 @@ curl -X POST http://<bridge>:8001/tools/invoke \
 
 ## 测试
 
+### Agent 合规测试
+
+验证 CLI agent 是否正确实现 ACP 协议 — **无需启动 Bridge**：
+
+```bash
+bash test/test_agent_compliance.sh kiro-cli acp --trust-all-tools
+bash test/test_agent_compliance.sh claude-agent-acp
+bash test/test_agent_compliance.sh python3 examples/echo-agent.py
+```
+
+覆盖：initialize、session/new、session/prompt（通知 + 结果）、ping。详见 [AGENT_SPEC.md](AGENT_SPEC.md)。
+
+### 集成测试
+
 ```bash
 ACP_TOKEN=<token> bash test/test.sh http://127.0.0.1:8001
 ```
@@ -422,3 +467,11 @@ ACP_TOKEN=<token> bash test/test.sh http://127.0.0.1:8001 --only codex
 | Codex: 不信任目录 | `/tmp` 不是 git repo | 添加 `--skip-git-repo-check` 到 args |
 | Codex: 缺少 LITELLM_API_KEY | 环境变量未传递 | 在 config 中设置 `litellm.env.LITELLM_API_KEY` |
 | Codex: 不支持的参数 | Bedrock 拒绝 Codex 参数 | LiteLLM 配置 `drop_params: true` |
+
+## 安全问题
+
+详见 [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications)。
+
+## 许可证
+
+本项目基于 MIT-0 许可证。详见 [LICENSE](LICENSE) 文件。
