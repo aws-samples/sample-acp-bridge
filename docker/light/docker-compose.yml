@@ -20,6 +20,7 @@ services:
       - ANTHROPIC_MODEL                # e.g. global.anthropic.claude-sonnet-4-6
       - ANTHROPIC_API_KEY              # or use API key directly
       - LITELLM_API_KEY                # for Codex via LiteLLM
+      - OPENCLAW_TOKEN                  # for webhook callback to OpenClaw
     volumes:
       - ../../config.yaml:/app/config.yaml
 
