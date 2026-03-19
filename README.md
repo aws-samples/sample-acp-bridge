@@ -105,6 +105,30 @@ uv sync
 uv run main.py
 ```
 
+## Docker Quick Start
+
+A lightweight Docker image containing only the ACP Bridge gateway. Agent CLIs (Kiro, Claude Code, Codex) stay on your host — mount them into the container as needed.
+
+```bash
+# 1. Prepare config
+cp config.yaml.example config.yaml
+# Edit config.yaml with your settings
+
+# 2. Set environment variables
+export ACP_BRIDGE_TOKEN=<your-token>
+
+# 3. Edit docker/light/docker-compose.yml
+#    Uncomment volume mounts for the agents you have installed
+
+# 4. Build and run
+docker compose -f docker/light/docker-compose.yml up -d
+
+# Check logs
+docker compose -f docker/light/docker-compose.yml logs -f
+```
+
+See `docker/light/docker-compose.yml` for mount examples for each agent.
+
 ## Codex + LiteLLM Setup
 
 [OpenAI Codex CLI](https://github.com/openai/codex) doesn't support ACP protocol natively, so it runs in PTY mode (subprocess). To use non-OpenAI models (e.g. Kimi K2.5 on Bedrock), Codex needs [LiteLLM](https://github.com/BerriAI/litellm) as an OpenAI-compatible proxy.
