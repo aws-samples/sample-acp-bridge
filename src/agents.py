@@ -117,12 +117,15 @@ def make_pty_agent_handler(agent_cfg: dict, verbose: bool = False):
         env.update(agent_cfg.get("env", {}))
 
         cmd = [command] + list(args) + [prompt]
+        pty_cwd = agent_cfg.get("working_dir", "/tmp")
+        os.makedirs(pty_cwd, exist_ok=True)
+
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.DEVNULL,
-            cwd=agent_cfg.get("working_dir", "/tmp"),
+            cwd=pty_cwd,
             env=env,
         )
 
