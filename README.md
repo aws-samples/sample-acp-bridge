@@ -1,74 +1,96 @@
-```
-╔══════════════════════════════════════════════════════════════╗
-║                                                              ║
-║     _   ___ ___   ___      _    _                            ║
-║    /_\ / __| _ \ | _ )_ __(_)__| |__ _  ___                  ║
-║   / _ \ (__| _/  | _ \ '_|| / _` / _` |/ -_)                 ║
-║  /_/ \_\___|_|   |___/|_| |_\__,_\__, \___|                  ║
-║                                   |___/                      ║
-╠══════════════════════════════════════════════════════════════╣
-║                                                              ║
-║    🤖 Kiro ───┐                                              ║
-║    🤖 Claude ──┼──► acp 🌉 ──► 🦞 OpenClaw ──► 🌍 world     ║
-║    🤖 Codex ──┘                                              ║
-║                                                              ║
-║          https://github.com/xiwan/acp-bridge                 ║
-╚══════════════════════════════════════════════════════════════╝
-
-        ~ Local AI agents 🔌 ACP protocol 🦞 The world ~
-```
-
 # ACP Bridge
 
-[![GitHub stars](https://img.shields.io/github/stars/xiwan/acp-bridge?style=social)](https://github.com/xiwan/acp-bridge/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/xiwan/acp-bridge?style=social)](https://github.com/xiwan/acp-bridge/network/members)
-[![GitHub Discussions](https://img.shields.io/github/discussions/xiwan/acp-bridge?logo=github&label=Discussions)](https://github.com/xiwan/acp-bridge/discussions)
-[![License: MIT-0](https://img.shields.io/badge/License-MIT--0-green.svg)](LICENSE)
-[![AWS Blog](https://img.shields.io/badge/AWS_Blog-Published-orange?logo=amazonaws)](https://aws.amazon.com/cn/blogs/china/enable-kiro-and-claude-code-for-im-with-acp-bridge-async-ai-workflow/)
+> **This README is optimized for AI agents (Kiro CLI, Claude Code, Codex, etc.).**
+> Human-readable version: [README.human.md](README.human.md) | [中文文档](README.zh-CN.md)
 
-[中文文档](README.zh-CN.md)
+A bridge service that exposes local CLI agents via [ACP (Agent Client Protocol)](https://agentclientprotocol.com/) over HTTP, with async job support and webhook push notifications.
 
-A bridge service that exposes local CLI agents (Kiro CLI, Claude Code, [OpenAI Codex](https://github.com/openai/codex), etc.) via [ACP (Agent Client Protocol)](https://agentclientprotocol.com/) over HTTP, with async job support and Discord push notifications.
+---
 
-## Architecture
+## Agent Execution Guide — Read This First
+
+> **This section is for you, the executing agent. Follow it strictly.**
+
+### Step 1: Understand the Architecture
 
 ```
-┌──────────┐            ┌──────────┐  HTTP JSON req     ┌──────────────┐  ACP stdio     ┌──────────────┐
-│ Discord  │◀──────────▶│ OpenClaw │──────────────────▶│  ACP Bridge  │──────────────▶│  CLI Agent   │
-│ User     │  Discord   │ Gateway  │◀──── SSE stream ───│  (uvicorn)   │◀── JSON-RPC ──│  kiro/claude │
-└──────────┘            └──────────┘◀── /tools/invoke ──└──────────────┘               └──────────────┘
-                                      (async job push)
+CLI Agents (kiro/claude/codex)
+        ↕ stdio JSON-RPC
+   ACP Bridge (uvicorn :8001)
+        ↕ HTTP
+   OpenClaw Gateway → Discord/Feishu/...
 ```
 
-## Features
+Key concepts:
+- ACP Bridge manages a **process pool** of CLI agent subprocesses
+- Each `(agent, session_id)` pair maps to one subprocess with retained context
+- Two agent modes: **ACP** (structured JSON-RPC, process reuse) and **PTY** (subprocess per call, stateless)
+- Auth: Bearer Token + IP allowlist (both required)
 
-- Native ACP protocol support: structured event stream (thinking / tool_call / text / status)
-- Process pool: reuse subprocess per session, automatic multi-turn context retention
-- Sync + SSE streaming + Markdown card output
-- Async jobs: submit and return immediately, webhook callback on completion
-- Discord push: send results via OpenClaw Gateway `/tools/invoke`
-- Job monitoring: stuck detection (>10min auto-fail), webhook retry, status stats
-- Auto-reply to `session/request_permission` (prevents Claude from hanging)
-- Bearer Token + IP allowlist dual authentication
-- OpenClaw tools proxy: unified entry point for message/tts/nodes/cron/web_search and more
-- Client is pure bash + jq, zero Python dependency
+### Step 2: Diagnose Current State
 
-## Changelog
+Before any setup or modification, run this diagnostic:
 
-| Version | Date | Description |
-|---------|------|-------------|
-| v0.8.0 | 2026-03-19 | Docker light mode: gateway-only image with host agent mounting |
-| v0.7.3 | 2026-03-18 | Request-level cwd, tools proxy fix, test improvements |
-| v0.7.2 | 2026-03-18 | Multi-IM formatter (Discord/Feishu), unified target field, systemd |
-| v0.7.1 | 2026-03-18 | ACP agent compliance test, AGENT_SPEC.md, echo-agent reference impl |
-| v0.7.0 | 2026-03-17 | OpenClaw tools proxy, agent health probe, auto-recovery |
-| v0.6.0 | 2026-03-15 | Codex PTY support, LiteLLM integration, acp-client.sh |
+```bash
+echo "====== Runtime ======"
+python3 --version 2>&1 || echo "PYTHON3_NOT_FOUND"
+uv --version 2>&1 || echo "UV_NOT_FOUND"
+node --version 2>&1 || echo "NODE_NOT_FOUND"
+
+echo ""
+echo "====== Service ======"
+curl -s http://127.0.0.1:8001/health 2>/dev/null || echo "BRIDGE_NOT_RUNNING"
+
+echo ""
+echo "====== Config ======"
+cat config.yaml 2>/dev/null | head -5 || echo "CONFIG_NOT_FOUND"
+
+echo ""
+echo "====== Agents ======"
+which kiro-cli 2>/dev/null && kiro-cli --version 2>/dev/null || echo "KIRO_NOT_FOUND"
+which claude-agent-acp 2>/dev/null || echo "CLAUDE_ACP_NOT_FOUND"
+which codex 2>/dev/null || echo "CODEX_NOT_FOUND"
+
+echo ""
+echo "====== Docker ======"
+sudo docker ps --filter "name=acp-bridge" --format "{{.Names}} {{.Status}} {{.Image}}" 2>/dev/null || echo "DOCKER_NOT_AVAILABLE"
+```
+
+### Step 3: Execute by Phase
+
+Based on diagnostic results, execute phases in order. **Report ✅/❌ after each phase before proceeding.**
+
+| Phase | Task | Section | Prerequisite | Skip If |
+|---|---|---|---|---|
+| 1 | Install prerequisites | [Prerequisites](#prerequisites) | None | `python3 --version` ≥ 3.12 + `uv --version` OK |
+| 2 | Install ≥1 CLI agent | [Prerequisites](#prerequisites) | Phase 1 | At least one agent found in diagnostic |
+| 3 | Create config | [Configuration](#configuration-reference) | Phase 2 | `config.yaml` exists with correct `auth_token` |
+| 4a | Start Bridge (native) | [Quick Start](#quick-start) | Phase 3 | Health returns `{"status":"ok"}` |
+| 4b | Start Bridge (Docker) | [Docker Quick Start](#docker-quick-start) | Phase 3 + Docker | Health returns `{"status":"ok"}` |
+| 5 | Verify | [Verification](#verification-checklist) | Phase 4 | — |
+
+> Phase 4a and 4b are mutually exclusive — pick one based on Docker availability.
+> If diagnostic shows Bridge already running, skip to Phase 5.
+
+### Execution Principles
+
+| Principle | Detail |
+|---|---|
+| Diagnose before act | Always run Step 2 before making changes |
+| Idempotent operations | Check state before writing; skip if already correct |
+| Fail fast | Stop and report on any non-zero exit code or unexpected output |
+| Minimal user interaction | Only ask user for secrets (tokens, API keys) |
+| Report per phase | Summarize each phase with ✅/❌ before proceeding |
+| Completed phases can be skipped | If diagnostic shows a phase is done, mark ✅ and move on |
+
+---
 
 ## Project Structure
 
 ```
 acp-bridge/
 ├── main.py              # Entry: process pool, handler registration, job/health endpoints
+├── config.yaml          # Service configuration (copy from config.yaml.example)
 ├── src/
 │   ├── acp_client.py    # ACP process pool + JSON-RPC connection management
 │   ├── agents.py        # Agent handlers (ACP mode + PTY fallback)
@@ -84,160 +106,113 @@ acp-bridge/
 │   └── echo-agent.py    # Minimal ACP-compliant reference agent
 ├── test/
 │   ├── lib.sh                     # Test helpers (assertions, env init)
-│   ├── test.sh                    # Full test suite runner
-│   ├── test_agent_compliance.sh   # Agent compliance test (direct stdio, no Bridge needed)
+│   ├── test.sh                    # Full test suite runner (31 cases)
+│   ├── test_agent_compliance.sh   # Agent compliance test (direct stdio)
 │   ├── test_common.sh             # Common tests (agent listing, error handling)
 │   ├── test_tools.sh              # OpenClaw tools proxy tests
 │   ├── test_kiro.sh               # Kiro agent tests
 │   ├── test_claude.sh             # Claude agent tests
 │   ├── test_codex.sh              # Codex agent tests
 │   └── reports/                   # Test reports
-├── AGENT_SPEC.md        # ACP agent integration specification
-├── config.yaml          # Service configuration
-├── pyproject.toml
+├── docker/light/
+│   ├── Dockerfile                 # Multi-stage build (debian:bookworm-slim, ~439MB)
+│   ├── docker-compose.yml         # Mount host agents into container
+│   └── .env.example               # Environment variable template
+├── AGENT_SPEC.md        # ACP agent integration specification (JSON-RPC protocol)
+├── pyproject.toml       # Python deps: acp-sdk, pyyaml
 └── uv.lock
 ```
 
+---
+
 ## Prerequisites
 
-- Python >= 3.12
-- [uv](https://docs.astral.sh/uv/) package manager
-- A CLI agent installed (e.g. `kiro-cli`, `claude-agent-acp`, `codex`)
-- Client dependencies: `curl`, `jq`, `uuidgen`
-- For Codex: [Node.js](https://nodejs.org/) (npm), [LiteLLM](https://github.com/BerriAI/litellm) (if using non-OpenAI models via proxy)
+| Requirement | Version | Check Command |
+|---|---|---|
+| Python | ≥ 3.12 | `python3 --version` |
+| uv | latest | `uv --version` |
+| curl, jq, uuidgen | any | `which curl jq uuidgen` |
+| At least one CLI agent | — | See agent table below |
+
+| Agent | Install | Mode | Notes |
+|---|---|---|---|
+| Kiro CLI | `curl -fsSL https://cli.kiro.dev/install \| bash` | ACP | Requires `kiro-cli login` |
+| Claude Code | `npm i -g @zed-industries/claude-agent-acp` | ACP | Requires Anthropic API key or Bedrock |
+| Codex | `npm i -g @openai/codex` | PTY | Requires OpenAI key or LiteLLM proxy |
+
+---
 
 ## Quick Start
 
 ```bash
 cd acp-bridge
 cp config.yaml.example config.yaml
-# Edit config.yaml with your settings
+# Edit config.yaml — set auth_token and agent working_dir at minimum
 uv sync
 uv run main.py
 ```
 
+Verify:
+```bash
+curl -s http://127.0.0.1:8001/health
+# → {"status":"ok","version":"0.8.0","uptime":...}
+```
+
+---
+
 ## Docker Quick Start
 
-A lightweight Docker image containing only the ACP Bridge gateway. Agent CLIs (Kiro, Claude Code, Codex) stay on your host — mount them into the container as needed.
+Lightweight image containing only the ACP Bridge gateway. Agent CLIs stay on host — mount them into the container.
 
 ```bash
 # 1. Prepare config
 cp config.yaml.example config.yaml
-# Edit config.yaml with your settings
+# Edit config.yaml
 
-# 2. Edit docker/light/docker-compose.yml
-#    Uncomment volume mounts for the agents you have installed
-
-# 3. Set environment variables (pick one method)
-
-# Method A: .env file (recommended, works with sudo)
+# 2. Set environment variables
 cp docker/light/.env.example docker/light/.env
 # Edit docker/light/.env with your tokens
 
-# Method B: inline env vars
-sudo \
-  ACP_BRIDGE_TOKEN=<your-token> \
-  CLAUDE_CODE_USE_BEDROCK=1 \
-  ANTHROPIC_MODEL=<your-model> \
-  LITELLM_API_KEY=<your-litellm-key> \
-  docker compose -f docker/light/docker-compose.yml up -d
+# 3. Edit docker/light/docker-compose.yml
+#    Uncomment volume mounts for the agents you have installed
 
 # 4. Build and run
 sudo docker compose -f docker/light/docker-compose.yml up -d --build
 
-# Check logs
+# 5. Verify
+curl -s http://127.0.0.1:8001/health
 sudo docker compose -f docker/light/docker-compose.yml logs -f
 ```
 
-> **Note:** When using `sudo`, shell environment variables and `~` paths are NOT passed to Docker. Use a `.env` file or pass variables inline as shown above.
+> **Note:** When using `sudo`, shell env vars and `~` paths are NOT passed to Docker. Use a `.env` file or pass variables inline.
 
-See `docker/light/docker-compose.yml` for mount examples for each agent.
+---
 
-## Codex + LiteLLM Setup
-
-[OpenAI Codex CLI](https://github.com/openai/codex) doesn't support ACP protocol natively, so it runs in PTY mode (subprocess). To use non-OpenAI models (e.g. Kimi K2.5 on Bedrock), Codex needs [LiteLLM](https://github.com/BerriAI/litellm) as an OpenAI-compatible proxy.
-
-### Install
-
-```bash
-# Codex CLI
-npm i -g @openai/codex
-
-# LiteLLM proxy
-pip install 'litellm[proxy]'
-```
-
-### Configure Codex
-
-```toml
-# ~/.codex/config.toml
-model = "bedrock/moonshotai.kimi-k2.5"
-model_provider = "bedrock"
-
-[model_providers.bedrock]
-name = "AWS Bedrock via LiteLLM"
-base_url = "http://localhost:4000/v1"
-env_key = "LITELLM_API_KEY"
-```
-
-### Configure LiteLLM
-
-```yaml
-# ~/.codex/litellm-config.yaml
-model_list:
-  - model_name: "bedrock/moonshotai.kimi-k2.5"
-    litellm_params:
-      model: "bedrock/moonshotai.kimi-k2.5"
-      aws_region_name: "us-east-1"
-
-general_settings:
-  master_key: "sk-litellm-bedrock"
-
-litellm_settings:
-  drop_params: true
-```
-
-`drop_params: true` is required — Codex sends parameters (e.g. `web_search_options`) that Bedrock doesn't support.
-
-LiteLLM uses the EC2 instance's AWS credentials (IAM Role or `~/.aws/credentials`) to access Bedrock. The `master_key` is just the proxy's own auth token.
-
-### Start LiteLLM
-
-```bash
-LITELLM_API_KEY="sk-litellm-bedrock" litellm --config ~/.codex/litellm-config.yaml --port 4000
-```
-
-### Data Flow
-
-```
-acp-bridge ──(PTY)──► codex exec ──(HTTP)──► LiteLLM :4000 ──(Bedrock API)──► Kimi K2.5
-```
-
-## Configuration
+## Configuration Reference
 
 ```yaml
 server:
   host: "0.0.0.0"
   port: 8001
-  session_ttl_hours: 24
+  session_ttl_hours: 24          # Idle session cleanup
   shutdown_timeout: 30
 
 pool:
-  max_processes: 20
-  max_per_agent: 10
+  max_processes: 20              # Total concurrent agent subprocesses
+  max_per_agent: 10              # Per-agent limit
 
 webhook:
   url: "http://<openclaw-ip>:18789/tools/invoke"
-  token: "<OPENCLAW_GATEWAY_TOKEN>"
-  account_id: "default"
-  target: "channel:<default-channel-id>"        # also accepts feishu targets
+  token: "${OPENCLAW_TOKEN}"
+  account_id: "default"          # OpenClaw bot account: "default" for Discord, "main" for Feishu
+  target: "channel:<channel-id>" # Default push target
 
 security:
-  auth_token: "${ACP_BRIDGE_TOKEN}"
+  auth_token: "${ACP_BRIDGE_TOKEN}"   # Supports ${ENV_VAR} references
   allowed_ips:
     - "127.0.0.1"
 
-litellm:
+litellm:                         # Only needed for Codex with non-OpenAI models
   url: "http://localhost:4000"
   required_by: ["codex"]
   env:
@@ -246,7 +221,7 @@ litellm:
 agents:
   kiro:
     enabled: true
-    mode: "acp"
+    mode: "acp"                  # "acp" = JSON-RPC stdio | "pty" = subprocess per call
     command: "kiro-cli"
     acp_args: ["acp", "--trust-all-tools"]
     working_dir: "/tmp"
@@ -267,6 +242,27 @@ agents:
     description: "OpenAI Codex CLI agent"
 ```
 
+---
+
+## API Endpoints
+
+| Method | Path | Description | Auth | Example |
+|---|---|---|---|---|
+| GET | `/health` | Health check | No | `curl http://host:8001/health` |
+| GET | `/health/agents` | Agent status | Yes | |
+| GET | `/agents` | List registered agents | Yes | |
+| POST | `/runs` | Sync/streaming agent call | Yes | See [Client Usage](#client-usage) |
+| POST | `/jobs` | Submit async job | Yes | See [Async Jobs](#async-jobs) |
+| GET | `/jobs` | List all jobs + stats | Yes | |
+| GET | `/jobs/{job_id}` | Query single job | Yes | |
+| GET | `/tools` | List OpenClaw tools | Yes | |
+| POST | `/tools/invoke` | Invoke OpenClaw tool | Yes | See [Tools Proxy](#openclaw-tools-proxy) |
+| DELETE | `/sessions/{agent}/{session_id}` | Close session | Yes | |
+
+All authenticated endpoints require: `Authorization: Bearer <token>` header + client IP in allowlist.
+
+---
+
 ## Client Usage
 
 ### acp-client.sh
@@ -275,35 +271,53 @@ agents:
 export ACP_BRIDGE_URL=http://<bridge-ip>:8001
 export ACP_TOKEN=<your-token>
 
-# List available agents
+# List agents
 ./skill/acp-client.sh -l
 
-# Sync call
+# Sync call (default agent: kiro)
 ./skill/acp-client.sh "Explain the project structure"
-
-# Streaming call
-./skill/acp-client.sh --stream "Analyze this code"
-
-# Markdown card output (ideal for IM display)
-./skill/acp-client.sh --card -a kiro "Introduce yourself"
 
 # Specify agent
 ./skill/acp-client.sh -a claude "hello"
+./skill/acp-client.sh -a codex "Reply with ok"
 
-# Multi-turn conversation
-./skill/acp-client.sh -s 00000000-0000-0000-0000-000000000001 "continue"
+# Streaming
+./skill/acp-client.sh --stream "Analyze this code"
+
+# Markdown card output (for IM display)
+./skill/acp-client.sh --card -a kiro "Introduce yourself"
+
+# Multi-turn conversation (same session_id = same context)
+./skill/acp-client.sh -s 00000000-0000-0000-0000-000000000001 "first message"
+./skill/acp-client.sh -s 00000000-0000-0000-0000-000000000001 "follow up"
 ```
 
-## Async Jobs + Discord Push
+### Direct curl
 
-Submit long-running tasks and get results pushed to Discord automatically.
+```bash
+# Sync call
+curl -X POST http://host:8001/runs \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"agent_name":"kiro","prompt":"hello","session_id":"<uuid>"}'
 
-![Async Job Sample](statics/sample-aysnc-job.png)
+# Streaming (SSE)
+curl -X POST http://host:8001/runs \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"agent_name":"kiro","prompt":"hello","stream":true}'
+```
+
+---
+
+## Async Jobs
+
+Submit long-running tasks. Results are pushed via webhook (Discord/Feishu/etc.) on completion.
 
 ### Submit
 
 ```bash
-curl -X POST http://<bridge>:8001/jobs \
+curl -X POST http://host:8001/jobs \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -316,134 +330,119 @@ curl -X POST http://<bridge>:8001/jobs \
 # → {"job_id": "xxx", "status": "pending"}
 ```
 
-#### Feishu Example
-
-```bash
-curl -X POST http://<bridge>:8001/jobs \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "agent_name": "kiro",
-    "prompt": "Analyze the codebase",
-    "target": "user:<feishu-open-id>",
-    "channel": "feishu",
-    "callback_meta": {"account_id": "main"}
-  }'
-```
-
 ### Query
 
 ```bash
-curl http://<bridge>:8001/jobs/<job_id> \
-  -H "Authorization: Bearer <token>"
+curl http://host:8001/jobs/<job_id> -H "Authorization: Bearer <token>"
 ```
 
-### Callback Flow
-
-```
-POST /jobs → Bridge executes in background → On completion POST to OpenClaw /tools/invoke
-  → OpenClaw sends to Discord/Feishu/... via message tool → User receives result
-```
-
-### target Format
+### Target Format
 
 | Scenario | Format | Example |
-|----------|--------|---------|
-| Discord channel | `channel:<id>` or `#name` | `channel:1477514611317145732` |
+|---|---|---|
+| Discord channel | `channel:<id>` | `channel:1477514611317145732` |
 | Discord DM | `user:<user_id>` | `user:123456789` |
 | Feishu user | `user:<open_id>` | `user:ou_2dfd02ef...` |
 | Feishu group | `<chat_id>` | `oc_xxx` |
 
-`account_id` refers to the OpenClaw bot account — `default` for Discord, `main` for Feishu (depends on your OpenClaw config).
-
 ### Job Monitoring
 
-- `GET /jobs` — List all jobs + status stats
-- Patrol every 60s: jobs stuck >10min are auto-marked as failed + notified
-- Failed webhook sends are retried automatically until success or job expiry
+- `GET /jobs` — list all jobs + status stats
+- Patrol every 60s: jobs stuck >10min auto-marked failed + notified
+- Failed webhooks retried automatically
 
-## API Endpoints
-
-| Method | Path | Description | Auth |
-|--------|------|-------------|------|
-| GET | `/agents` | List registered agents | Yes |
-| POST | `/runs` | Sync/streaming agent call | Yes |
-| POST | `/jobs` | Submit async job | Yes |
-| GET | `/jobs` | List all jobs + stats | Yes |
-| GET | `/jobs/{job_id}` | Query single job | Yes |
-| GET | `/tools` | List available OpenClaw tools | Yes |
-| POST | `/tools/invoke` | Invoke an OpenClaw tool (proxy) | Yes |
-| GET | `/health` | Health check | No |
-| GET | `/health/agents` | Agent status | Yes |
-| DELETE | `/sessions/{agent}/{session_id}` | Close session | Yes |
+---
 
 ## OpenClaw Tools Proxy
 
-ACP Bridge proxies OpenClaw's tool system, giving you a unified entry point for both agent calls and tool invocations.
-
-### Available Tools
+Unified entry point for OpenClaw tool invocations.
 
 | Tool | Description |
-|------|-------------|
-| `message` | Send messages across Discord/Telegram/Slack/WhatsApp/Signal/iMessage |
-| `tts` | Convert text to speech |
-| `web_search` | Search the web |
-| `web_fetch` | Fetch and extract content from a URL |
+|---|---|
+| `message` | Send messages (Discord/Telegram/Slack/WhatsApp/Signal/iMessage) |
+| `tts` | Text to speech |
+| `web_search` | Web search |
+| `web_fetch` | Fetch and extract URL content |
 | `nodes` | Control paired devices (notify, run commands, camera) |
 | `cron` | Manage scheduled jobs |
-| `gateway` | Gateway config and restart |
-| `image` | Analyze an image with AI |
-| `browser` | Control browser (open, screenshot, navigate) |
-
-### Client Usage
+| `image` | Analyze image with AI |
+| `browser` | Browser control (open, screenshot, navigate) |
 
 ```bash
-# List available tools
+# List tools
 ./tools/tools-client.sh -l
 
-# Send a Discord message
+# Send message
 ./tools/tools-client.sh message send \
   --arg channel=discord \
   --arg target="channel:123456" \
   --arg message="Hello from ACP Bridge"
 
-# Text to speech
-./tools/tools-client.sh tts "Today's build passed"
-
-# Web search
-./tools/tools-client.sh web_search "Python 3.13 new features"
-
-# Notify a Mac
-./tools/tools-client.sh nodes notify \
-  --arg node="office-mac" \
-  --arg title="Deploy done" \
-  --arg body="v1.2.3 is live"
-```
-
-### Direct API
-
-```bash
-curl -X POST http://<bridge>:8001/tools/invoke \
+# Direct API
+curl -X POST http://host:8001/tools/invoke \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
-  -d '{
-    "tool": "message",
-    "action": "send",
-    "args": {
-      "channel": "discord",
-      "target": "channel:123456",
-      "message": "Hello from ACP Bridge"
-    }
-  }'
+  -d '{"tool":"message","action":"send","args":{"channel":"discord","target":"channel:123456","message":"Hello"}}'
 ```
 
-Requires `webhook.url` to be configured pointing to an OpenClaw Gateway.
+Requires `webhook.url` configured pointing to an OpenClaw Gateway.
+
+---
+
+## Codex + LiteLLM Setup
+
+Codex doesn't support ACP natively — runs in PTY mode. For non-OpenAI models (e.g. Kimi K2.5 on Bedrock), use [LiteLLM](https://github.com/BerriAI/litellm) as proxy.
+
+```
+acp-bridge ──(PTY)──► codex exec ──(HTTP)──► LiteLLM :4000 ──(Bedrock API)──► Model
+```
+
+### Install
+
+```bash
+npm i -g @openai/codex
+pip install 'litellm[proxy]'
+```
+
+### Codex config (`~/.codex/config.toml`)
+
+```toml
+model = "bedrock/moonshotai.kimi-k2.5"
+model_provider = "bedrock"
+
+[model_providers.bedrock]
+name = "AWS Bedrock via LiteLLM"
+base_url = "http://localhost:4000/v1"
+env_key = "LITELLM_API_KEY"
+```
+
+### LiteLLM config (`~/.codex/litellm-config.yaml`)
+
+```yaml
+model_list:
+  - model_name: "bedrock/moonshotai.kimi-k2.5"
+    litellm_params:
+      model: "bedrock/moonshotai.kimi-k2.5"
+      aws_region_name: "us-east-1"
+general_settings:
+  master_key: "sk-litellm-bedrock"
+litellm_settings:
+  drop_params: true    # Required — Codex sends params Bedrock doesn't support
+```
+
+### Start LiteLLM
+
+```bash
+LITELLM_API_KEY="sk-litellm-bedrock" litellm --config ~/.codex/litellm-config.yaml --port 4000
+```
+
+---
 
 ## Testing
 
-### Agent Compliance Test
+### Agent Compliance Test (no Bridge needed)
 
-Verify a CLI agent implements the ACP protocol correctly — **no Bridge required**:
+Verify a CLI agent implements ACP protocol correctly via direct stdio:
 
 ```bash
 bash test/test_agent_compliance.sh kiro-cli acp --trust-all-tools
@@ -451,64 +450,94 @@ bash test/test_agent_compliance.sh claude-agent-acp
 bash test/test_agent_compliance.sh python3 examples/echo-agent.py
 ```
 
-Covers: initialize, session/new, session/prompt (notifications + result), ping. See [AGENT_SPEC.md](AGENT_SPEC.md) for the full specification.
+Covers: initialize, session/new, session/prompt (notifications + result), ping.
+Full protocol spec: [AGENT_SPEC.md](AGENT_SPEC.md)
 
-### Integration Tests
+### Integration Tests (requires running Bridge)
 
 ```bash
+# Full suite (31 test cases)
 ACP_TOKEN=<token> bash test/test.sh http://127.0.0.1:8001
-```
 
-Run individual agent tests:
-
-```bash
-ACP_TOKEN=<token> bash test/test_codex.sh
-ACP_TOKEN=<token> bash test/test_kiro.sh
-ACP_TOKEN=<token> bash test/test_claude.sh
-```
-
-Or filter from the main runner:
-
-```bash
+# Single agent
+ACP_TOKEN=<token> bash test/test.sh http://127.0.0.1:8001 --only kiro
+ACP_TOKEN=<token> bash test/test.sh http://127.0.0.1:8001 --only claude
 ACP_TOKEN=<token> bash test/test.sh http://127.0.0.1:8001 --only codex
 ```
 
-Covers: agent listing, sync/streaming calls, multi-turn conversation, Claude, Codex, async jobs, error handling.
+### Test Coverage
 
-## Process Pool
+| Suite | Cases | What's Tested |
+|---|---|---|
+| Common | 4 | Agent listing, error handling |
+| Tools Proxy | 9 | Tool listing, API endpoints, invocation, client script |
+| Kiro | 7 | Sync, streaming, multi-turn context, async job submit + query |
+| Claude | 5 | Sync, streaming, multi-turn context, async job |
+| Codex | 6 | Sync, streaming, multi-turn (PTY stateless), async job |
 
-- Each `(agent, session_id)` pair maps to an independent CLI ACP subprocess
-- Same session reuses subprocess across turns, context is automatically retained
-- Crashed subprocesses are rebuilt automatically (context lost, user is notified)
-- Idle sessions are cleaned up after TTL expiry
-- `session/request_permission` is auto-replied with `allow_always` (Claude compatibility)
+---
 
-## Authentication
+## Process Pool Behavior
 
-- IP allowlist + Bearer Token dual authentication
-- `/health` is unauthenticated (for load balancer probes)
-- Token supports `${ENV_VAR}` environment variable references
-- Webhook token is configured separately from Bridge auth token
+- Each `(agent, session_id)` → independent CLI subprocess
+- Same session reuses subprocess, context retained across turns
+- Crashed subprocesses rebuilt automatically (context lost, user notified)
+- Idle sessions cleaned after TTL expiry
+- `session/request_permission` auto-replied with `allow_always` (Claude compatibility)
+
+---
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
-|---------|-------|-----|
-| `403 forbidden` | IP not in allowlist | Add IP to `allowed_ips` |
-| `401 unauthorized` | Incorrect token | Check Bearer token |
-| `pool_exhausted` | Concurrency limit reached | Increase `max_processes` |
-| Claude hangs | Permission request not answered | Already handled (auto-allow) |
-| Discord push fails | Wrong or missing `account_id` | Use `default`, not agent name |
+|---|---|---|
+| `403 forbidden` | IP not in allowlist | Add IP to `security.allowed_ips` |
+| `401 unauthorized` | Wrong token | Check `ACP_BRIDGE_TOKEN` env var and `security.auth_token` |
+| `pool_exhausted` | Concurrency limit | Increase `pool.max_processes` |
+| Claude hangs | Permission prompt | Already handled (auto-allow) |
+| Discord push fails | Wrong `account_id` | Use `default` for Discord, `main` for Feishu |
 | Discord 500 | Bad target format | DM: `user:<id>`, channel: `channel:<id>` |
-| Job stuck | Agent process anomaly | Auto-marked failed after 10min |
+| Job stuck >10min | Agent process anomaly | Auto-marked failed by patrol |
 | Codex: not trusted dir | `/tmp` not a git repo | Add `--skip-git-repo-check` to args |
-| Codex: missing LITELLM_API_KEY | Env var not passed | Set `litellm.env.LITELLM_API_KEY` in config |
+| Codex: missing LITELLM_API_KEY | Env var not passed | Set in `litellm.env` in config.yaml |
 | Codex: unsupported params | Bedrock rejects Codex params | Set `drop_params: true` in LiteLLM config |
+| Bridge won't start in Docker | `.python-version` mismatch | Ensure Dockerfile uses `uv sync --frozen` with `.python-version` |
 
-## Security
+---
 
-See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
+## Verification Checklist
+
+After setup, run this to confirm everything works:
+
+```bash
+echo "=== 1. Health ==="
+curl -s http://127.0.0.1:8001/health | python3 -m json.tool
+
+echo ""
+echo "=== 2. Agents ==="
+curl -s http://127.0.0.1:8001/agents \
+  -H "Authorization: Bearer $ACP_TOKEN" | python3 -m json.tool
+
+echo ""
+echo "=== 3. Quick call ==="
+./skill/acp-client.sh -a kiro "Reply with ok"
+
+echo ""
+echo "=== 4. Full test suite ==="
+ACP_TOKEN=$ACP_TOKEN bash test/test.sh http://127.0.0.1:8001
+```
+
+Expected: health returns `ok`, agents list shows enabled agents, call returns response, 31/31 tests pass.
+
+---
+
+## Links
+
+- [ACP Protocol](https://agentclientprotocol.com/)
+- [Agent Integration Spec](AGENT_SPEC.md)
+- [Echo Agent Reference Implementation](examples/echo-agent.py)
+- [GitHub](https://github.com/xiwan/acp-bridge)
 
 ## License
 
-This library is licensed under the MIT-0 License. See the [LICENSE](LICENSE) file.
+MIT-0 — see [LICENSE](LICENSE).
