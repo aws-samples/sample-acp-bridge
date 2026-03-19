@@ -1,17 +1,24 @@
 FROM python:3.12-slim
 
-# Node.js for npm-based agents (claude-agent-acp, codex)
+# Node.js runtime for npm-based agents
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl ca-certificates && \
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+    npm cache clean --force && \
+    apt-get remove -y curl && \
+    apt-get autoremove -y && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/*
 
 RUN pip install --no-cache-dir uv
 
 # Pre-create symlinks for npm-based agents (actual modules mounted at runtime)
 RUN ln -s ../lib/node_modules/@zed-industries/claude-agent-acp/dist/index.js /usr/bin/claude-agent-acp && \
     ln -s ../lib/node_modules/@openai/codex/bin/codex.js /usr/bin/codex
+
+# Pre-create placeholder files for kiro-cli binaries (prevents Docker mounting as directories)
+RUN touch /usr/local/bin/kiro-cli /usr/local/bin/kiro-cli-chat /usr/local/bin/kiro-cli-term && \
+    chmod +x /usr/local/bin/kiro-cli /usr/local/bin/kiro-cli-chat /usr/local/bin/kiro-cli-term
 
 RUN useradd -m -d /home/app app
 
@@ -32,7 +39,7 @@ COPY examples/ examples/
 RUN chown -R app:app /app
 USER app
 
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev && rm -rf /opt/uv/cache/*
 
 EXPOSE 8001
 

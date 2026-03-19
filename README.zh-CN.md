@@ -130,18 +130,31 @@ uv run main.py
 cp config.yaml.example config.yaml
 # 编辑 config.yaml
 
-# 2. 设置环境变量
-export ACP_BRIDGE_TOKEN=<your-token>
-
-# 3. 编辑 docker/light/docker-compose.yml
+# 2. 编辑 docker/light/docker-compose.yml
 #    取消注释你已安装的 agent 对应的 volume 挂载
 
+# 3. 设置环境变量（二选一）
+
+# 方式 A：.env 文件（推荐，sudo 下也能用）
+cp docker/light/.env.example docker/light/.env
+# 编辑 docker/light/.env 填入你的 token
+
+# 方式 B：命令行内联传入
+sudo \
+  ACP_BRIDGE_TOKEN=<your-token> \
+  CLAUDE_CODE_USE_BEDROCK=1 \
+  ANTHROPIC_MODEL=<your-model> \
+  LITELLM_API_KEY=<your-litellm-key> \
+  docker compose -f docker/light/docker-compose.yml up -d
+
 # 4. 构建并运行
-docker compose -f docker/light/docker-compose.yml up -d
+sudo docker compose -f docker/light/docker-compose.yml up -d --build
 
 # 查看日志
-docker compose -f docker/light/docker-compose.yml logs -f
+sudo docker compose -f docker/light/docker-compose.yml logs -f
 ```
+
+> **注意：** 使用 `sudo` 时，shell 环境变量和 `~` 路径不会传递给 Docker。请使用 `.env` 文件或如上所示内联传入变量。
 
 详见 `docker/light/docker-compose.yml` 中各 agent 的挂载示例。
 

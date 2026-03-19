@@ -4,8 +4,8 @@
 # Uncomment the agents you have installed.
 #
 # Usage:
+#   cp .env.example .env              # edit with your tokens
 #   cp config.yaml.example config.yaml  # edit config
-#   export ACP_BRIDGE_TOKEN=<your-token>
 #   docker compose -f docker/light/docker-compose.yml up -d
 
 services:
@@ -24,18 +24,18 @@ services:
       - ../../config.yaml:/app/config.yaml
 
       ## --- Kiro CLI (native binary) ---
-      # - ~/.local/bin/kiro-cli:/usr/local/bin/kiro-cli:ro
-      # - ~/.local/bin/kiro-cli-chat:/usr/local/bin/kiro-cli-chat:ro
-      # - ~/.local/bin/kiro-cli-term:/usr/local/bin/kiro-cli-term:ro
-      # - ~/.kiro:/home/app/.kiro                              # config + settings
-      # - ~/.local/share/kiro-cli:/home/app/.local/share/kiro-cli  # auth data
+      - /home/ec2-user/.local/bin/kiro-cli:/usr/local/bin/kiro-cli:ro
+      - /home/ec2-user/.local/bin/kiro-cli-chat:/usr/local/bin/kiro-cli-chat:ro
+      - /home/ec2-user/.local/bin/kiro-cli-term:/usr/local/bin/kiro-cli-term:ro
+      - /home/ec2-user/.kiro:/home/app/.kiro                              # config + settings
+      - /home/ec2-user/.local/share/kiro-cli:/home/app/.local/share/kiro-cli  # auth data
 
       ## --- Claude Code (npm, needs node in container ✅) ---
-      # - /usr/lib/node_modules/@zed-industries:/usr/lib/node_modules/@zed-industries:ro
-      # - /usr/lib/node_modules/@anthropic-ai:/usr/lib/node_modules/@anthropic-ai:ro
+      - /usr/lib/node_modules/@zed-industries:/usr/lib/node_modules/@zed-industries:ro
+      - /usr/lib/node_modules/@anthropic-ai:/usr/lib/node_modules/@anthropic-ai:ro
 
       ## --- Codex (npm, needs node in container ✅) ---
-      # - /usr/lib/node_modules/@openai:/usr/lib/node_modules/@openai:ro
-      # - ~/.codex:/home/app/.codex:ro                         # codex config
+      - /usr/lib/node_modules/@openai:/usr/lib/node_modules/@openai:ro
+      - /home/ec2-user/.codex:/home/app/.codex:ro                         # codex config
 
     restart: unless-stopped

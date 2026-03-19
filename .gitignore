@@ -18,3 +18,5 @@ config.yaml
 .vscode/
 .idea/
 acp-bridge.service
+.env
+docker/light/.env

@@ -125,18 +125,31 @@ A lightweight Docker image containing only the ACP Bridge gateway. Agent CLIs (K
 cp config.yaml.example config.yaml
 # Edit config.yaml with your settings
 
-# 2. Set environment variables
-export ACP_BRIDGE_TOKEN=<your-token>
-
-# 3. Edit docker/light/docker-compose.yml
+# 2. Edit docker/light/docker-compose.yml
 #    Uncomment volume mounts for the agents you have installed
 
+# 3. Set environment variables (pick one method)
+
+# Method A: .env file (recommended, works with sudo)
+cp docker/light/.env.example docker/light/.env
+# Edit docker/light/.env with your tokens
+
+# Method B: inline env vars
+sudo \
+  ACP_BRIDGE_TOKEN=<your-token> \
+  CLAUDE_CODE_USE_BEDROCK=1 \
+  ANTHROPIC_MODEL=<your-model> \
+  LITELLM_API_KEY=<your-litellm-key> \
+  docker compose -f docker/light/docker-compose.yml up -d
+
 # 4. Build and run
-docker compose -f docker/light/docker-compose.yml up -d
+sudo docker compose -f docker/light/docker-compose.yml up -d --build
 
 # Check logs
-docker compose -f docker/light/docker-compose.yml logs -f
+sudo docker compose -f docker/light/docker-compose.yml logs -f
 ```
+
+> **Note:** When using `sudo`, shell environment variables and `~` paths are NOT passed to Docker. Use a `.env` file or pass variables inline as shown above.
 
 See `docker/light/docker-compose.yml` for mount examples for each agent.
 
