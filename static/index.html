@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ACP Bridge</title>
+<link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  .msg-content pre{background:#1e293b;color:#e2e8f0;padding:12px;border-radius:6px;overflow-x:auto;margin:8px 0}
+  .msg-content code:not(pre code){background:#e2e8f0;padding:2px 5px;border-radius:3px;font-size:.9em}
+  .msg-content p{margin:4px 0}.msg-content ul,.msg-content ol{margin-left:1.5em}
+  .thinking{border-left:3px solid #94a3b8;padding-left:10px;color:#64748b;font-size:.9em}
+  .tool-tag{display:inline-block;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:4px;padding:1px 6px;font-size:.8em;margin:2px}
+  #messages::-webkit-scrollbar{width:6px}
+  #messages::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px}
+</style>
+</head>
+<body class="bg-gray-50 h-screen flex flex-col">
+
+<!-- Header -->
+<div class="bg-white border-b px-4 py-2 flex items-center justify-between flex-shrink-0">
+  <div class="flex items-center" style="gap:12px">
+    <span class="text-lg font-semibold">&#127753; ACP Bridge</span>
+    <select id="agent" class="border rounded px-2 py-1 text-sm bg-white"></select>
+    <span id="status" class="text-xs text-gray-400"></span>
+  </div>
+  <div class="flex items-center" style="gap:8px">
+    <button id="btn-new" class="text-xs border rounded px-2 py-1 hover:bg-gray-100">&#128260; New</button>
+    <button id="btn-jobs" class="text-xs border rounded px-2 py-1 hover:bg-gray-100">&#128203; Jobs</button>
+  </div>
+</div>
+
+<!-- Messages -->
+<div id="messages" class="flex-1 overflow-y-auto px-4 py-3" style="min-height:0"></div>
+
+<!-- Input -->
+<div class="bg-white border-t px-4 py-3 flex-shrink-0">
+  <form id="form" class="flex" style="gap:8px">
+    <input id="input" type="text" placeholder="Send a message..."
+           class="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+           autocomplete="off">
+    <button type="submit" id="btn-send"
+            class="bg-blue-500 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-600 disabled:opacity-50">
+      Send
+    </button>
+  </form>
+</div>
+
+<!-- Jobs Modal -->
+<div id="jobs-modal" class="hidden fixed inset-0 flex items-center justify-center" style="background:rgba(0,0,0,.3);z-index:50">
+  <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl flex flex-col m-4" style="max-height:80vh">
+    <div class="flex items-center justify-between px-4 py-3 border-b">
+      <span class="font-semibold">&#128203; Jobs</span>
+      <button id="btn-jobs-close" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+    </div>
+    <div id="jobs-list" class="flex-1 overflow-y-auto p-4 text-sm"></div>
+  </div>
+</div>
+
+<script>
+var BASE = window.location.origin;
+var TOKEN = localStorage.getItem('acp_token') || '';
+var SESSION = genUUID();
+var streaming = false;
+var supportsStream = !!(window.ReadableStream && window.TextDecoder);
+
+function genUUID() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    var r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
+function authHeaders() {
+  var h = {'Content-Type': 'application/json'};
+  if (TOKEN) h['Authorization'] = 'Bearer ' + TOKEN;
+  return h;
+}
+
+function escHtml(s) {
+  return $('<span>').text(s).html();
+}
+
+// --- Init ---
+function init() {
+  if (!TOKEN) {
+    TOKEN = prompt('Enter ACP Bridge token:') || '';
+    if (TOKEN) localStorage.setItem('acp_token', TOKEN);
+  }
+  $.ajax({
+    url: BASE + '/agents',
+    headers: authHeaders(),
+    success: function(resp) {
+      var agents = resp.agents || resp;
+      $('#agent').empty();
+      $.each(agents, function(_, a) {
+        var name = a.name || a.agent;
+        $('#agent').append('<option value="' + name + '">' + name + '</option>');
+      });
+      $('#status').text('connected').removeClass('text-red-400').addClass('text-green-500');
+    },
+    error: function(xhr) {
+      $('#status').text('disconnected').removeClass('text-green-500').addClass('text-red-400');
+      if (xhr.status === 401) {
+        localStorage.removeItem('acp_token');
+        TOKEN = prompt('Token invalid. Enter token:') || '';
+        if (TOKEN) { localStorage.setItem('acp_token', TOKEN); init(); }
+      }
+    }
+  });
+}
+
+// --- Messages ---
+function addMsg(role, html) {
+  var align = role === 'user' ? 'flex justify-end' : 'flex justify-start';
+  var bg = role === 'user' ? 'bg-blue-500 text-white' : 'bg-white border';
+  var id = 'msg-' + new Date().getTime() + '-' + Math.random().toString(36).substr(2, 5);
+  $('#messages').append(
+    '<div class="' + align + '" style="margin-bottom:12px">' +
+    '<div id="' + id + '" class="msg-content rounded-lg px-3 py-2 text-sm ' + bg + '" style="max-width:80%">' +
+    html + '</div></div>'
+  );
+  scrollBottom();
+  return id;
+}
+
+function scrollBottom() {
+  var el = document.getElementById('messages');
+  if (el) el.scrollTop = el.scrollHeight;
+}
+
+function renderMsg(id, content, thinking, tools) {
+  var html = '';
+  if (thinking) {
+    html += '<details class="mb-2"><summary class="text-gray-400 text-xs cursor-pointer">&#128173; Thinking</summary>';
+    html += '<div class="thinking mt-1">' + marked.parse(thinking) + '</div></details>';
+  }
+  if (tools.length) {
+    html += '<div class="mb-1">';
+    $.each(tools, function(_, t) { html += '<span class="tool-tag">&#9989; ' + escHtml(t) + '</span>'; });
+    html += '</div>';
+  }
+  html += marked.parse(content || '...');
+  $('#' + id).html(html);
+  scrollBottom();
+}
+
+// --- Send (streaming with fetch, fallback to sync) ---
+function sendMessage(prompt) {
+  if (streaming || !$.trim(prompt)) return;
+  streaming = true;
+  $('#btn-send').prop('disabled', true).text('...');
+  addMsg('user', escHtml(prompt));
+
+  var agent = $('#agent').val();
+  var payload = {
+    agent_name: agent,
+    session_id: SESSION,
+    input: [{parts: [{content: prompt, content_type: 'text/plain'}]}]
+  };
+
+  if (supportsStream) {
+    sendStream(payload);
+  } else {
+    sendSync(payload);
+  }
+}
+
+function sendStream(payload) {
+  payload.mode = 'stream';
+  var msgId = null;
+  var content = '', thinking = '', tools = [];
+
+  fetch(BASE + '/runs', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(payload)
+  }).then(function(resp) {
+    if (!resp.ok) {
+      return resp.text().then(function(t) { throw new Error('Error ' + resp.status + ': ' + t); });
+    }
+    msgId = addMsg('assistant', '<span class="text-gray-400">thinking...</span>');
+    var reader = resp.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer = '';
+
+    function read() {
+      return reader.read().then(function(result) {
+        if (result.done) return;
+        buffer += decoder.decode(result.value, {stream: true});
+        var lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        $.each(lines, function(_, line) {
+          if (line.indexOf('data: ') !== 0) return;
+          try {
+            var evt = JSON.parse(line.substring(6));
+            if (evt.type === 'message.part') {
+              var name = (evt.part && evt.part.name) || '';
+              var text = (evt.part && evt.part.content) || '';
+              if (name === 'thought') {
+                thinking += text;
+              } else if (text.indexOf('[tool.done]') === 0) {
+                var t = text.replace('[tool.done] ', '').replace(/\s*\(.*\)\s*$/, '').trim();
+                if (t) tools.push(t);
+              } else if (text.indexOf('[tool.start]') !== 0 && text.indexOf('[status]') !== 0 && name !== 'heartbeat') {
+                content += text;
+              }
+              renderMsg(msgId, content, thinking, tools);
+            } else if (evt.type === 'run.failed') {
+              var err = (evt.run && evt.run.error) || {};
+              content += '\n\n&#10060; ' + (err.code || 'error') + ': ' + (err.message || 'unknown');
+              renderMsg(msgId, content, thinking, tools);
+            }
+          } catch(e) {}
+        });
+        return read();
+      });
+    }
+    return read();
+  }).then(function() {
+    if (!content && msgId) renderMsg(msgId, '(empty response)', thinking, tools);
+  })['catch'](function(e) {
+    if (msgId) {
+      content += '\n\n&#10060; ' + e.message;
+      renderMsg(msgId, content, thinking, tools);
+    } else {
+      addMsg('assistant', '<span class="text-red-500">&#10060; ' + escHtml(e.message) + '</span>');
+    }
+  }).then(function() {
+    streaming = false;
+    $('#btn-send').prop('disabled', false).text('Send');
+  });
+}
+
+function sendSync(payload) {
+  var msgId = addMsg('assistant', '<span class="text-gray-400">thinking...</span>');
+  $.ajax({
+    url: BASE + '/runs',
+    method: 'POST',
+    headers: authHeaders(),
+    data: JSON.stringify(payload),
+    contentType: 'application/json',
+    timeout: 300000,
+    success: function(resp) {
+      var text = '';
+      if (resp.output) {
+        $.each(resp.output, function(_, msg) {
+          $.each(msg.parts || [], function(_, p) {
+            if (p.name !== 'thought' && p.content) text += p.content;
+          });
+        });
+      }
+      renderMsg(msgId, text || '(empty response)', '', []);
+    },
+    error: function(xhr) {
+      renderMsg(msgId, '&#10060; Error ' + xhr.status + ': ' + (xhr.responseText || 'request failed'), '', []);
+    },
+    complete: function() {
+      streaming = false;
+      $('#btn-send').prop('disabled', false).text('Send');
+    }
+  });
+}
+
+// --- Jobs ---
+function loadJobs() {
+  $.ajax({
+    url: BASE + '/jobs',
+    headers: authHeaders(),
+    success: function(resp) {
+      var jobs = resp.jobs || [];
+      if (!jobs.length) { $('#jobs-list').html('<p class="text-gray-400">No jobs</p>'); return; }
+      var s = resp.summary || {};
+      var html = '<div class="mb-3 text-xs text-gray-500">' +
+        'pending:' + (s.pending||0) + ' running:' + (s.running||0) +
+        ' completed:' + (s.completed||0) + ' failed:' + (s.failed||0) + '</div>';
+      html += '<div>';
+      $.each(jobs.slice(0, 20), function(_, j) {
+        var icon = j.status === 'completed' ? '&#9989;' : j.status === 'failed' ? '&#10060;' : j.status === 'running' ? '&#128260;' : '&#9203;';
+        var dur = j.duration ? j.duration + 's' : j.elapsed ? j.elapsed + 's...' : '';
+        html += '<div class="border rounded p-2" style="margin-bottom:8px">';
+        html += '<div class="flex justify-between"><span>' + icon + ' <b>' + escHtml(j.agent) + '</b> <code class="text-xs">' + j.job_id.substring(0,8) + '</code></span>';
+        html += '<span class="text-xs text-gray-400">' + dur + '</span></div>';
+        if (j.result) html += '<div class="mt-1 text-xs text-gray-600 overflow-hidden" style="max-height:5em">' + escHtml(j.result.substring(0,200)) + (j.result.length > 200 ? '...' : '') + '</div>';
+        if (j.error) html += '<div class="mt-1 text-xs text-red-500">' + escHtml(j.error) + '</div>';
+        html += '</div>';
+      });
+      html += '</div>';
+      $('#jobs-list').html(html);
+    },
+    error: function(xhr) {
+      $('#jobs-list').html('<p class="text-red-500">' + (xhr.statusText || 'error') + '</p>');
+    }
+  });
+}
+
+// --- Events ---
+$('#form').on('submit', function(e) { e.preventDefault(); var v = $('#input').val(); $('#input').val(''); sendMessage(v); });
+$('#btn-new').on('click', function() { SESSION = genUUID(); $('#messages').empty(); addMsg('assistant', '<span class="text-gray-400">New session started</span>'); });
+$('#btn-jobs').on('click', function() { $('#jobs-modal').removeClass('hidden'); loadJobs(); });
+$('#btn-jobs-close').on('click', function() { $('#jobs-modal').addClass('hidden'); });
+$('#jobs-modal').on('click', function(e) { if (e.target === this) $(this).addClass('hidden'); });
+$('#input').on('keydown', function(e) { if (e.which === 13 && !e.shiftKey) { e.preventDefault(); $('#form').submit(); } });
+
+init();
+</script>
+</body>
+</html>

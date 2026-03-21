@@ -7,7 +7,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-NO_AUTH_PATHS = {"/health"}
+NO_AUTH_PATHS = {"/health", "/ui"}
 MAX_BODY_BYTES = 1 * 1024 * 1024  # 1 MB
 
 
@@ -62,9 +62,10 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             return JSONResponse({"error": "forbidden"}, status_code=403)
 
         if self.auth_token and request.url.path not in NO_AUTH_PATHS:
-            auth = request.headers.get("authorization", "")
-            if auth != f"Bearer {self.auth_token}":
-                return JSONResponse({"error": "unauthorized"}, status_code=401)
+            if not request.url.path.startswith("/static"):
+                auth = request.headers.get("authorization", "")
+                if auth != f"Bearer {self.auth_token}":
+                    return JSONResponse({"error": "unauthorized"}, status_code=401)
 
         if not self._rate_ok(client_ip):
             return JSONResponse({"error": "rate_limit_exceeded"}, status_code=429)

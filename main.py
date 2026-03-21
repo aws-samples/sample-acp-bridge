@@ -124,6 +124,16 @@ def main():
     app.add_middleware(SecurityMiddleware, allowed_ips=allowed_ips, auth_token=auth_token,
                        rate_limit=rate_limit, rate_window=rate_window, max_body=max_body)
 
+    # Static Web UI
+    from starlette.staticfiles import StaticFiles
+    from starlette.responses import FileResponse
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    if os.path.isdir(static_dir):
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+        @app.get("/ui")
+        async def ui():
+            return FileResponse(os.path.join(static_dir, "index.html"))
+
     from contextlib import asynccontextmanager
     from fastapi import Path as PathParam
     from fastapi.responses import JSONResponse

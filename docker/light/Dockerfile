@@ -75,6 +75,7 @@ COPY --chown=app:app src/ src/
 COPY --chown=app:app skill/ skill/
 COPY --chown=app:app tools/ tools/
 COPY --chown=app:app examples/ examples/
+COPY --chown=app:app static/ static/
 COPY --from=py-builder --chown=app:app /app/.venv /app/.venv
 
 USER app
