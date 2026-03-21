@@ -19,6 +19,13 @@ class ToolInvokeRequest(BaseModel):
 
 def register(app, openclaw_url: str, openclaw_token: str, default_account_id: str):
     openclaw_base = openclaw_url.replace("/tools/invoke", "") if openclaw_url else ""
+    _http: list = []  # mutable container for client reuse
+
+    async def _get_http() -> httpx.AsyncClient:
+        if not _http or _http[0].is_closed:
+            _http.clear()
+            _http.append(httpx.AsyncClient(timeout=30))
+        return _http[0]
 
     @app.post("/tools/invoke")
     async def tools_invoke(req: ToolInvokeRequest):
@@ -41,9 +48,9 @@ def register(app, openclaw_url: str, openclaw_token: str, default_account_id: st
         if req.action:
             payload["action"] = req.action
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(openclaw_url, json=payload, headers=headers)
-                return JSONResponse(resp.json(), status_code=resp.status_code)
+            client = await _get_http()
+            resp = await client.post(openclaw_url, json=payload, headers=headers)
+            return JSONResponse(resp.json(), status_code=resp.status_code)
         except Exception as e:
             log.error("tools_invoke_failed: tool=%s error=%s", req.tool, e)
             return JSONResponse({"error": str(e)}, status_code=502)

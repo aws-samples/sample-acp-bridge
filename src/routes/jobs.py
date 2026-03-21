@@ -66,12 +66,10 @@ def register(app, job_mgr: JobManager | None, webhook_account_id: str, webhook_d
         if not job_mgr:
             return {"jobs": []}
         jobs = job_mgr.list_jobs()
-        return {
-            "jobs": [j.to_dict() for j in jobs],
-            "summary": {
-                "pending": sum(1 for j in jobs if j.status == "pending"),
-                "running": sum(1 for j in jobs if j.status == "running"),
-                "completed": sum(1 for j in jobs if j.status == "completed"),
-                "failed": sum(1 for j in jobs if j.status == "failed"),
-            },
-        }
+        summary = {"pending": 0, "running": 0, "completed": 0, "failed": 0}
+        dicts = []
+        for j in jobs:
+            dicts.append(j.to_dict())
+            if j.status in summary:
+                summary[j.status] += 1
+        return {"jobs": dicts, "summary": summary}

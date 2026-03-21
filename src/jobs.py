@@ -63,8 +63,14 @@ class JobManager:
         self._webhook_url = webhook_url
         self._webhook_token = webhook_token
         self._base_url = base_url
+        self._http: httpx.AsyncClient | None = None
         self._store = JobStore(db_path)
         self._recover_jobs()
+
+    async def _get_http(self) -> httpx.AsyncClient:
+        if self._http is None or self._http.is_closed:
+            self._http = httpx.AsyncClient(timeout=10)
+        return self._http
 
     def _recover_jobs(self):
         """On startup: queue incomplete jobs for background retry, reload unsent webhooks."""
@@ -268,19 +274,19 @@ class JobManager:
                 headers["x-openclaw-message-channel"] = channel
 
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                for payload in payloads:
-                    resp = await client.post(url, json=payload, headers=headers)
-                    log.info("webhook_sent: job=%s channel=%s status=%d part=%d/%d",
-                             job.job_id, channel,
-                             resp.status_code, payloads.index(payload) + 1, len(payloads))
-                    if resp.status_code != 200:
-                        break
-                    if len(payloads) > 1:
-                        await asyncio.sleep(0.5)
-                else:
-                    job.webhook_sent = True
-                    self._store.save(job)
+            client = await self._get_http()
+            for payload in payloads:
+                resp = await client.post(url, json=payload, headers=headers)
+                log.info("webhook_sent: job=%s channel=%s status=%d part=%d/%d",
+                         job.job_id, channel,
+                         resp.status_code, payloads.index(payload) + 1, len(payloads))
+                if resp.status_code != 200:
+                    break
+                if len(payloads) > 1:
+                    await asyncio.sleep(0.5)
+            else:
+                job.webhook_sent = True
+                self._store.save(job)
         except Exception as e:
             log.error("webhook_failed: job=%s error=%s", job.job_id, e)
 
