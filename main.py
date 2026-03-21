@@ -17,6 +17,7 @@ from src.acp_client import AcpProcessPool
 from src.agents import make_acp_agent_handler, make_pty_agent_handler
 from src.jobs import JobManager
 from src.security import SecurityMiddleware
+from src.store import ChatStore
 
 _VERSION = open(os.path.join(os.path.dirname(__file__), "VERSION")).read().strip()
 
@@ -46,6 +47,7 @@ def main():
     parser.add_argument("--port", type=int, help="Override listen port")
     parser.add_argument("--config", default="config.yaml", help="Config file path")
     parser.add_argument("--verbose", "-v", action="store_true")
+    parser.add_argument("--ui", action="store_true", help="Enable Web UI at /ui")
     args = parser.parse_args()
 
     setup_logging(args.verbose)
@@ -125,14 +127,16 @@ def main():
                        rate_limit=rate_limit, rate_window=rate_window, max_body=max_body)
 
     # Static Web UI
-    from starlette.staticfiles import StaticFiles
-    from starlette.responses import FileResponse
-    static_dir = os.path.join(os.path.dirname(__file__), "static")
-    if os.path.isdir(static_dir):
-        app.mount("/static", StaticFiles(directory=static_dir), name="static")
-        @app.get("/ui")
-        async def ui():
-            return FileResponse(os.path.join(static_dir, "index.html"))
+    ui_enabled = args.ui or config.get("server", {}).get("ui", False)
+    if ui_enabled:
+        from starlette.staticfiles import StaticFiles
+        from starlette.responses import FileResponse
+        static_dir = os.path.join(os.path.dirname(__file__), "static")
+        if os.path.isdir(static_dir):
+            app.mount("/static", StaticFiles(directory=static_dir), name="static")
+            @app.get("/ui")
+            async def ui():
+                return FileResponse(os.path.join(static_dir, "index.html"))
 
     from contextlib import asynccontextmanager
     from fastapi import Path as PathParam
@@ -223,6 +227,37 @@ def main():
     @app.get("/health")
     async def health():
         return {"status": "ok", "version": _VERSION, "uptime": int(time.time() - start_time)}
+
+    # --- Chat history ---
+    if ui_enabled:
+        db_path = config.get("server", {}).get("db_path", "data/jobs.db")
+        chat_store = ChatStore(db_path)
+
+        class ChatMsg(BaseModel):
+            session_id: str
+            agent: str
+            role: str
+            content: str
+            job_id: str = ""
+
+        @app.post("/chat/messages")
+        async def save_chat_message(msg: ChatMsg):
+            mid = chat_store.save_message(msg.session_id, msg.agent, msg.role, msg.content, msg.job_id)
+            return {"id": mid}
+
+        @app.post("/chat/fold")
+        async def fold_chat_session(req: dict):
+            chat_store.fold_session(req.get("session_id", ""))
+            return {"status": "ok"}
+
+        @app.get("/chat/messages")
+        async def load_chat_messages(limit: int = 200):
+            return {"messages": chat_store.load_recent(limit)}
+
+        @app.delete("/chat/messages")
+        async def clear_chat_messages():
+            n = chat_store.clear_all()
+            return {"deleted": n}
 
     @app.get("/health/agents")
     async def health_agents():
@@ -358,6 +393,8 @@ def main():
         log.info("jobs: monitor=60s stuck_timeout=600s webhook=%s", webhook_cfg.get("url", "(none)"))
     if _openclaw_url:
         log.info("tools_proxy: openclaw=%s", _openclaw_base)
+    if ui_enabled:
+        log.info("web_ui: enabled at /ui")
     log.info("starting on %s:%s", host, port)
 
     # Print banner

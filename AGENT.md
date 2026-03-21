@@ -189,6 +189,11 @@ ACP_TOKEN=$ACP_TOKEN bash test/test.sh http://127.0.0.1:18010
 | POST | `/jobs` | Yes | Async job submit |
 | GET | `/jobs/{id}` | Yes | Job status |
 | POST | `/tools/invoke` | Yes | OpenClaw tool proxy |
+| POST | `/chat/messages` | Yes | Save chat message (Web UI) |
+| GET | `/chat/messages` | Yes | Load recent messages (Web UI) |
+| DELETE | `/chat/messages` | Yes | Clear chat history (Web UI) |
+| POST | `/chat/fold` | Yes | Fold session messages (Web UI) |
+| GET | `/ui` | No | Web UI (if `--ui` enabled) |
 
 Auth: `Authorization: Bearer <token>` + IP in `security.allowed_ips`.
 

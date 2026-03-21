@@ -51,12 +51,14 @@ A bridge service that exposes local CLI agents (Kiro CLI, Claude Code, [OpenAI C
 - Auto-reply to `session/request_permission` (prevents Claude from hanging)
 - Bearer Token + IP allowlist dual authentication
 - OpenClaw tools proxy: unified entry point for message/tts/nodes/cron/web_search and more
+- Web UI (opt-in): chat interface at `/ui` with persistence (SQLite), message folding, and settings panel
 - Client is pure bash + jq, zero Python dependency
 
 ## Changelog
 
 | Version | Date | Description |
 |---------|------|-------------|
+| v0.8.3 | 2026-03-21 | Web UI opt-in (`--ui`), chat persistence (SQLite), message folding, settings panel |
 | v0.8.1 | 2026-03-19 | Docker image 618→439MB, agent-optimized README, test coverage 25→31 |
 | v0.8.0 | 2026-03-19 | Docker light mode: gateway-only image with host agent mounting |
 | v0.7.3 | 2026-03-18 | Request-level cwd, tools proxy fix, test improvements |
@@ -222,6 +224,7 @@ server:
   port: 18010
   session_ttl_hours: 24
   shutdown_timeout: 30
+  ui: false                                     # enable Web UI at /ui (or use --ui flag)
 
 pool:
   max_processes: 20
@@ -374,8 +377,13 @@ POST /jobs → Bridge executes in background → On completion POST to OpenClaw 
 | GET | `/jobs/{job_id}` | Query single job | Yes |
 | GET | `/tools` | List available OpenClaw tools | Yes |
 | POST | `/tools/invoke` | Invoke an OpenClaw tool (proxy) | Yes |
+| POST | `/chat/messages` | Save a chat message (Web UI) | Yes |
+| GET | `/chat/messages` | Load recent chat messages (Web UI) | Yes |
+| DELETE | `/chat/messages` | Clear all chat messages (Web UI) | Yes |
+| POST | `/chat/fold` | Fold a session's messages (Web UI) | Yes |
 | GET | `/health` | Health check | No |
 | GET | `/health/agents` | Agent status | Yes |
+| GET | `/ui` | Web UI chat interface (if enabled) | No |
 | DELETE | `/sessions/{agent}/{session_id}` | Close session | Yes |
 
 ## OpenClaw Tools Proxy

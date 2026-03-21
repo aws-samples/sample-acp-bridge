@@ -95,3 +95,60 @@ class JobStore:
         d["webhook_sent"] = bool(d["webhook_sent"])
         d.setdefault("retries", 0)
         return d
+
+
+_CHAT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id   TEXT NOT NULL,
+    agent        TEXT NOT NULL,
+    role         TEXT NOT NULL,
+    content      TEXT NOT NULL,
+    job_id       TEXT DEFAULT '',
+    created_at   REAL NOT NULL,
+    folded       INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_chat_session ON chat_messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_chat_created ON chat_messages(created_at);
+"""
+
+
+class ChatStore:
+    def __init__(self, db_path: str = "data/jobs.db"):
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        self._db = sqlite3.connect(db_path, check_same_thread=False)
+        self._db.row_factory = sqlite3.Row
+        self._db.executescript(_CHAT_SCHEMA)
+
+    def save_message(self, session_id: str, agent: str, role: str,
+                     content: str, job_id: str = "") -> int:
+        cur = self._db.execute(
+            "INSERT INTO chat_messages (session_id, agent, role, content, job_id, created_at) VALUES (?,?,?,?,?,?)",
+            (session_id, agent, role, content, job_id, time.time()),
+        )
+        self._db.commit()
+        return cur.lastrowid
+
+    def fold_session(self, session_id: str):
+        self._db.execute(
+            "UPDATE chat_messages SET folded = 1 WHERE session_id = ? AND folded = 0",
+            (session_id,),
+        )
+        self._db.commit()
+
+    def load_recent(self, limit: int = 200) -> list[dict]:
+        rows = self._db.execute(
+            "SELECT * FROM chat_messages ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+    def delete_old(self, max_age: float = 7 * 86400) -> int:
+        cutoff = time.time() - max_age
+        cur = self._db.execute("DELETE FROM chat_messages WHERE created_at < ?", (cutoff,))
+        self._db.commit()
+        return cur.rowcount
+
+    def clear_all(self) -> int:
+        cur = self._db.execute("DELETE FROM chat_messages")
+        self._db.commit()
+        return cur.rowcount
