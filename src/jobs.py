@@ -13,6 +13,7 @@ import httpx
 from .acp_client import AcpError, AcpProcessPool, PoolExhaustedError
 from .formatters import get_formatter
 from .sse import transform_notification
+from .store import JobStore
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\[\?25[hl]")
 
@@ -53,13 +54,48 @@ class Job:
 
 class JobManager:
     def __init__(self, pool: AcpProcessPool | None = None, pty_configs: dict | None = None,
-                 webhook_url: str = "", webhook_token: str = "", base_url: str = ""):
+                 webhook_url: str = "", webhook_token: str = "", base_url: str = "",
+                 db_path: str = "data/jobs.db"):
         self._pool = pool
         self._pty_configs = pty_configs or {}
         self._jobs: dict[str, Job] = {}
         self._webhook_url = webhook_url
         self._webhook_token = webhook_token
         self._base_url = base_url
+        self._store = JobStore(db_path)
+        self._recover_jobs()
+
+    def _recover_jobs(self):
+        """On startup: fail orphaned running jobs, retry unsent webhooks."""
+        now = time.time()
+        # Mark interrupted jobs as failed
+        for d in self._store.load_incomplete():
+            job = self._dict_to_job(d)
+            job.status = "failed"
+            job.error = "interrupted: bridge restarted"
+            job.completed_at = now
+            self._jobs[job.job_id] = job
+            self._store.save(job)
+            log.warning("recovered_job: job=%s agent=%s was=%s → failed",
+                        job.job_id, job.agent, d["status"])
+        # Load unsent webhooks for retry
+        for d in self._store.load_unsent_webhooks():
+            job = self._dict_to_job(d)
+            self._jobs[job.job_id] = job
+            log.info("recovered_webhook: job=%s agent=%s", job.job_id, job.agent)
+
+    @staticmethod
+    def _dict_to_job(d: dict) -> Job:
+        return Job(
+            job_id=d["job_id"], agent=d["agent"], session_id=d["session_id"],
+            prompt=d["prompt"], cwd=d.get("cwd", ""), status=d["status"],
+            result=d.get("result", ""), error=d.get("error", ""),
+            tools=d.get("tools", []), created_at=d["created_at"],
+            completed_at=d.get("completed_at", 0),
+            callback_url=d.get("callback_url", ""),
+            callback_meta=d.get("callback_meta", {}),
+            webhook_sent=d.get("webhook_sent", False),
+        )
 
     def submit(self, agent: str, session_id: str, prompt: str,
                callback_url: str = "", callback_meta: dict | None = None,
@@ -71,23 +107,41 @@ class JobManager:
             callback_meta=callback_meta or {},
         )
         self._jobs[job.job_id] = job
+        self._store.save(job)
         asyncio.create_task(self._run(job))
         log.info("job_submitted: job=%s agent=%s session=%s", job.job_id, agent, session_id)
         return job
 
     def get(self, job_id: str) -> Job | None:
-        return self._jobs.get(job_id)
+        job = self._jobs.get(job_id)
+        if job:
+            return job
+        # Fallback to DB for historical jobs
+        rows = self._store._db.execute(
+            "SELECT * FROM jobs WHERE job_id = ?", (job_id,)
+        ).fetchall()
+        if rows:
+            return self._dict_to_job(self._store._row_to_dict(rows[0]))
+        return None
 
     def list_jobs(self, limit: int = 50) -> list[Job]:
-        return sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)[:limit]
+        # Merge in-memory jobs with DB historical jobs
+        seen = set(self._jobs.keys())
+        jobs = list(self._jobs.values())
+        for d in self._store.load_recent(limit):
+            if d["job_id"] not in seen:
+                jobs.append(self._dict_to_job(d))
+        return sorted(jobs, key=lambda j: j.created_at, reverse=True)[:limit]
 
     async def _run(self, job: Job):
         job.status = "running"
+        self._store.save(job)
         if job.agent in self._pty_configs:
             await self._run_pty(job)
         else:
             await self._run_acp(job)
         job.completed_at = time.time()
+        self._store.save(job)
         log.info("job_done: job=%s status=%s len=%d duration=%.1fs",
                  job.job_id, job.status, len(job.result), job.completed_at - job.created_at)
         if job.callback_url:
@@ -203,6 +257,7 @@ class JobManager:
                         await asyncio.sleep(0.5)
                 else:
                     job.webhook_sent = True
+                    self._store.save(job)
         except Exception as e:
             log.error("webhook_failed: job=%s error=%s", job.job_id, e)
 
@@ -243,6 +298,7 @@ class JobManager:
                 j.status = "failed"
                 j.error = f"timeout: job stuck for {int(now - j.created_at)}s"
                 j.completed_at = now
+                self._store.save(j)
                 if j.callback_url:
                     asyncio.create_task(self._webhook(j))
         # Retry unsent webhooks for completed/failed jobs
@@ -250,3 +306,7 @@ class JobManager:
             if j.status in ("completed", "failed") and j.callback_url and not j.webhook_sent:
                 log.info("webhook_retry: job=%s agent=%s", j.job_id, j.agent)
                 asyncio.create_task(self._webhook(j))
+        # Purge old rows from sqlite
+        deleted = self._store.delete_old(max_age)
+        if deleted:
+            log.info("store_cleanup: deleted %d old jobs", deleted)
