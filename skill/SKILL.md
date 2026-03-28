@@ -15,6 +15,17 @@ ACP_CLIENT="${CLAUDE_SKILL_DIR}/acp-client.sh"
 chmod +x "$ACP_CLIENT"
 ```
 
+## First Time Setup
+
+If ACP Bridge is not yet installed or running, follow the full setup guide:
+👉 [AGENT.md — Agent Execution Guide](https://github.com/xiwan/acp-bridge/blob/main/AGENT.md)
+
+It covers environment diagnosis, installation, configuration, and service startup (Docker / systemd / nohup).
+
+> Note: OpenClaw is optional — only needed for async job push (Discord/Feishu) and tools proxy. The core agent API (`/runs`, `/agents`) works standalone.
+
+Once the Bridge is running and you can reach its `/health` endpoint, proceed below.
+
 ## Auth Setup
 
 Before the first call, both `ACP_BRIDGE_URL` and `ACP_TOKEN` are required. If not set, **stop and ask the user**.
