@@ -1,21 +1,21 @@
 #!/bin/bash
-# ACP Bridge 客户端 — 调用远程 CLI agent（适配 acp-sdk 标准 API）
-# 用法:
-#   acp-client.sh <prompt>                    # 同步调用
-#   acp-client.sh --stream <prompt>           # 流式调用（SSE）
-#   acp-client.sh --card <prompt>             # 输出 Markdown 卡片（适合 IM 展示）
-#   acp-client.sh -s <uuid> <prompt>          # 指定 session_id
-#   acp-client.sh -a <agent> <prompt>         # 指定 agent
-#   acp-client.sh -l                          # 列出可用 agents
+# ACP Bridge Client — call remote CLI agents via ACP Bridge HTTP API
+# Usage:
+#   acp-client.sh <prompt>                    # sync call
+#   acp-client.sh --stream <prompt>           # streaming call (SSE)
+#   acp-client.sh --card <prompt>             # Markdown card output (for IM display)
+#   acp-client.sh -s <uuid> <prompt>          # specify session_id
+#   acp-client.sh -a <agent> <prompt>         # specify agent
+#   acp-client.sh -l                          # list available agents
 #
-# 环境变量:
-#   ACP_BRIDGE_URL  — Bridge 地址 (默认 http://127.0.0.1:18010)
-#   ACP_AGENT       — 默认 agent (默认 kiro)
-#   ACP_TOKEN       — 认证 token
-#   ACP_RETRIES     — 失败重试次数 (默认 2)
-#   ACP_TIMEOUT     — 同步调用超时秒数 (默认 300)
+# Environment variables:
+#   ACP_BRIDGE_URL  — Bridge address (default: http://127.0.0.1:18010)
+#   ACP_AGENT       — Default agent (default: kiro)
+#   ACP_TOKEN       — Auth token (prefer env var over -t flag to avoid ps exposure)
+#   ACP_RETRIES     — Retry count on failure (default: 2)
+#   ACP_TIMEOUT     — Sync call timeout in seconds (default: 300)
 #
-# 依赖: curl, jq, uuidgen
+# Dependencies: curl, jq, uuidgen
 
 set -euo pipefail
 
@@ -56,7 +56,7 @@ done
 AUTH=()
 [[ -n "$TOKEN" ]] && AUTH=(-H "Authorization: Bearer $TOKEN")
 
-# --- 列出 agents ---
+# --- List agents ---
 if $LIST; then
     curl -sf --connect-timeout "$CONNECT_TIMEOUT" --max-time 30 "${AUTH[@]}" "$URL/agents" | jq -r '
         (.agents // .) | .[] |
@@ -64,10 +64,10 @@ if $LIST; then
     exit 0
 fi
 
-# --- 查询 job 状态 ---
+# --- Query job status ---
 if [[ -n "$JOB_STATUS" ]]; then
     resp=$(curl -sf --connect-timeout "$CONNECT_TIMEOUT" --max-time 10 \
-        "${AUTH[@]}" "$URL/jobs/$JOB_STATUS") || { echo "❌ 查询失败" >&2; exit 1; }
+        "${AUTH[@]}" "$URL/jobs/$JOB_STATUS") || { echo "❌ Query failed" >&2; exit 1; }
     status=$(echo "$resp" | jq -r '.status // "unknown"')
     case "$status" in
         completed)
@@ -77,23 +77,23 @@ if [[ -n "$JOB_STATUS" ]]; then
             echo "$resp" | jq -r '"❌ \(.error)"'
             ;;
         *)
-            echo "⏳ 状态: $status"
+            echo "⏳ Status: $status"
             ;;
     esac
     exit 0
 fi
 
-[[ $# -eq 0 ]] && { echo "用法: acp-client.sh [选项] <prompt>" >&2; exit 1; }
+[[ $# -eq 0 ]] && { echo "Usage: acp-client.sh [options] <prompt>" >&2; exit 1; }
 
 PROMPT="$*"
 
-# --- session_id: 确定性 UUID v5 ---
+# --- session_id: deterministic UUID v5 ---
 [[ -z "$SESSION" ]] && SESSION=$(uuidgen -s -n @dns -N "$AGENT")
 
-# --- 构建 JSON payload ---
+# --- Build JSON payload ---
 MODE="sync"
 $STREAM && MODE="stream"
-# card 模式强制用 stream 获取结构化事件
+# card mode forces stream to get structured events
 $CARD && MODE="stream"
 
 PAYLOAD=$(jq -n \
@@ -107,7 +107,7 @@ PAYLOAD=$(jq -n \
       + (if $cwd != "" then {cwd: $cwd} else {} end)
       + (if $mode == "stream" then {mode: "stream"} else {} end)')
 
-# --- Async 模式：提交任务立即返回 ---
+# --- Async mode: submit and return immediately ---
 if $ASYNC; then
     ASYNC_PAYLOAD=$(jq -n \
         --arg agent "$AGENT" \
@@ -119,20 +119,20 @@ if $ASYNC; then
     resp=$(curl -sf --connect-timeout "$CONNECT_TIMEOUT" --max-time 30 \
         -X POST "${AUTH[@]}" "$URL/jobs" \
         -H "Content-Type: application/json" \
-        -d "$ASYNC_PAYLOAD") || { echo "❌ 提交失败" >&2; exit 1; }
+        -d "$ASYNC_PAYLOAD") || { echo "❌ Submit failed" >&2; exit 1; }
     job_id=$(echo "$resp" | jq -r '.job_id // empty')
     if [[ -n "$job_id" ]]; then
-        echo "✅ 已提交 (job: ${job_id:0:8}…)"
-        echo "查询状态: $0 --job-status $job_id"
+        echo "✅ Submitted (job: ${job_id:0:8}…)"
+        echo "Query status: $0 --job-status $job_id"
         echo "job_id: $job_id" >&2
     else
-        echo "❌ $(echo "$resp" | jq -r '.error // "未知错误"')" >&2
+        echo "❌ $(echo "$resp" | jq -r '.error // "unknown error"')" >&2
         exit 1
     fi
     exit 0
 fi
 
-# --- 带重试的调用 ---
+# --- API call with retry ---
 call_api() {
     if [[ "$MODE" == "stream" ]]; then
         curl -sN --connect-timeout "$CONNECT_TIMEOUT" \
@@ -157,19 +157,19 @@ retry() {
         fi
         ((attempt++))
         if (( attempt > MAX_RETRIES )); then
-            echo "❌ 连接失败 (已重试 $MAX_RETRIES 次): $URL" >&2
+            echo "❌ Connection failed (retried $MAX_RETRIES times): $URL" >&2
             return 1
         fi
         sleep $((attempt * 2))
     done
 }
 
-# --- SSE 数据行提取：过滤 + 去前缀，单进程 ---
+# --- SSE data line extraction: filter + strip prefix ---
 _sse_data_lines() {
     grep --line-buffered '^data: ' | sed -u 's/^data: //'
 }
 
-# --- Card 模式：单进程 jq 解析所有事件，bash 分拣写文件 ---
+# --- Card mode: single-process jq parses all events ---
 if $CARD; then
     TMPDIR_CARD=$(mktemp -d)
     trap 'rm -rf "$TMPDIR_CARD"' EXIT
@@ -178,13 +178,13 @@ if $CARD; then
     : > "$TMPDIR_CARD/content"
     : > "$TMPDIR_CARD/error"
 
-    # 单进程 jq 输出 tab 分隔的 type\tname\tcontent，避免每行 fork
+    # single-process jq outputs tab-separated type\tname\tcontent
     retry | _sse_data_lines | \
         jq --unbuffered -r '
             if .type == "message.part" then
                 ["part", (.part.name // ""), (.part.content // "")] | @tsv
             elif .type == "run.failed" then
-                ["error", "", ((.run.error.code // "error") + ": " + (.run.error.message // "未知错误"))] | @tsv
+                ["error", "", ((.run.error.code // "error") + ": " + (.run.error.message // "unknown error"))] | @tsv
             else empty end' | \
     while IFS=$'\t' read -t "$IDLE_TIMEOUT" -r etype name content; do
         case "$etype" in
@@ -195,7 +195,7 @@ if $CARD; then
                     case "$content" in
                         "[tool.start]"*|"[status]"*) ;;
                         "[tool.done]"*)
-                            # bash 内置提取 tool 名称，无需 fork sed
+                            # extract tool name with bash builtins, no fork
                             title="${content#\[tool.done\] }"
                             title="${title%% (*}"
                             echo "✅ \`$title\`" >> "$TMPDIR_CARD/tools"
@@ -210,7 +210,7 @@ if $CARD; then
         esac
     done
 
-    # 组装 Markdown 卡片
+    # Assemble Markdown card
     echo "**🤖 ${AGENT}**"
     echo ""
 
@@ -247,7 +247,7 @@ if $CARD; then
     exit 0
 fi
 
-# --- 流式模式：单进程 jq 处理所有 SSE 事件 ---
+# --- Stream mode: single-process jq handles all SSE events ---
 if $STREAM; then
     retry | _sse_data_lines | \
         jq --unbuffered -r '
@@ -259,7 +259,7 @@ if $STREAM; then
                 if .run.session_id then "session_id: " + .run.session_id | halt_error(0)
                 else empty end
             elif .type == "run.failed" then
-                "❌ " + (.run.error.code // "error") + ": " + (.run.error.message // "未知错误") | halt_error(1)
+                "❌ " + (.run.error.code // "error") + ": " + (.run.error.message // "unknown error") | halt_error(1)
             else empty end'
     rc=$?
     (( rc == 1 )) && exit 1
@@ -267,7 +267,7 @@ if $STREAM; then
     exit 0
 fi
 
-# --- 同步模式 ---
+# --- Sync mode ---
 RESP=$(retry) || exit 1
 
 status=$(echo "$RESP" | jq -r '.status // "unknown"')
@@ -281,12 +281,12 @@ case "$status" in
         [[ -n "$sid" ]] && echo "session_id: $sid" >&2
         ;;
     failed)
-        msg=$(echo "$RESP" | jq -r '(.error.code // "error") + ": " + (.error.message // "未知错误")')
+        msg=$(echo "$RESP" | jq -r '(.error.code // "error") + ": " + (.error.message // "unknown error")')
         echo "❌ $msg" >&2
         exit 1
         ;;
     *)
-        echo "⚠️  未知状态: $status" >&2
+        echo "⚠️  Unknown status: $status" >&2
         echo "$RESP"
         ;;
 esac
