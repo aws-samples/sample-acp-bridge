@@ -15,6 +15,8 @@ data/*.db
 
 # Local scripts
 start.sh
+OPERATIONS.md
+versions/
 
 # IDE / Editor
 .claude/

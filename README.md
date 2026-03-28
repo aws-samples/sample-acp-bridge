@@ -52,6 +52,8 @@ A bridge service that exposes local CLI agents (Kiro CLI, Claude Code, [OpenAI C
 - Bearer Token + IP allowlist dual authentication
 - OpenClaw tools proxy: unified entry point for message/tts/nodes/cron/web_search and more
 - Web UI (opt-in): chat interface at `/ui` with persistence (SQLite), message folding, and settings panel
+
+![Web UI](static/Screenshot01.png)
 - Client is pure bash + jq, zero Python dependency
 
 ## Agent Compatibility Matrix
@@ -79,6 +81,7 @@ A bridge service that exposes local CLI agents (Kiro CLI, Claude Code, [OpenAI C
 
 | Version | Date | Description |
 |---------|------|-------------|
+| v0.9.0 | 2026-03-28 | Adaptive Web UI: native CSS variables, dark mode, responsive layout, drop jQuery + Tailwind |
 | v0.8.4 | 2026-03-28 | Qwen Code + OpenCode agent support, test_qwen.sh, test_opencode.sh |
 | v0.8.3 | 2026-03-21 | Web UI opt-in (`--ui`), chat persistence (SQLite), message folding, settings panel |
 | v0.8.1 | 2026-03-19 | Docker image 618→439MB, agent-optimized README, test coverage 25→31 |
