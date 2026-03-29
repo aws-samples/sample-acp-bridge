@@ -81,11 +81,11 @@ AWS_SECRET_ACCESS_KEY=
 > When no task is active, it shows "No active version."
 
 ```yaml
-version: "0.9.0"
-description: "Adaptive Web UI with native CSS, dark mode, mobile support"
-status: "in-progress"
-current_phase: "Phase 6: Pre-commit"
-log_file: "versions/v0.9.0.md"
+version: ""
+description: ""
+status: "idle"
+current_phase: ""
+log_file: ""
 ```
 
 ---
