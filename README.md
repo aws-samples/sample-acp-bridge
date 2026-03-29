@@ -8,14 +8,15 @@
 ║                                   |___/                      ║
 ╠══════════════════════════════════════════════════════════════╣
 ║                                                              ║
-║    🤖 Kiro ───┐                                              ║
-║    🤖 Claude ──┼──► acp 🌉 ──► 🦞 OpenClaw ──► 🌍 world     ║
-║    🤖 Codex ──┘                                              ║
+║   🦞 OpenClaw ─┐              ┌──► 🤖 Kiro                   ║
+║                 ┼──► acp 🌉 ──┼──► 🤖 Claude                 ║
+║   🌐 Web UI ──┘              ├──► 🤖 Codex                   ║
+║                              └──► ...                        ║
 ║                                                              ║
 ║          https://github.com/xiwan/acp-bridge                 ║
 ╚══════════════════════════════════════════════════════════════╝
 
-        ~ Local AI agents 🔌 ACP protocol 🦞 The world ~
+        ~ 🌐 The world 🔌 ACP protocol 🤖 Local AI agents ~
 ```
 
 # ACP Bridge
@@ -33,11 +34,10 @@ A bridge service that exposes local CLI agents (Kiro CLI, Claude Code, [OpenAI C
 ## Architecture
 
 ```
-┌──────────┐            ┌──────────┐  HTTP JSON req     ┌──────────────┐  ACP stdio     ┌──────────────┐
-│ Discord  │◀──────────▶│ OpenClaw │──────────────────▶│  ACP Bridge  │──────────────▶│  CLI Agent   │
-│ User     │  Discord   │ Gateway  │◀──── SSE stream ───│  (uvicorn)   │◀── JSON-RPC ──│  kiro/claude │
-└──────────┘            └──────────┘◀── /tools/invoke ──└──────────────┘               └──────────────┘
-                                      (async job push)
+┌──────────┐  HTTP JSON req     ┌──────────────┐  ACP stdio     ┌──────────────┐
+│ OpenClaw │──────────────────▶│  ACP Bridge  │──────────────▶│  CLI Agent   │
+│ Gateway  │◀──── SSE stream ───│  (uvicorn)   │◀── JSON-RPC ──│  kiro/claude │
+└──────────┘◀── /tools/invoke ──└──────────────┘               └──────────────┘
 ```
 
 ## Features
@@ -52,8 +52,6 @@ A bridge service that exposes local CLI agents (Kiro CLI, Claude Code, [OpenAI C
 - Bearer Token + IP allowlist dual authentication
 - OpenClaw tools proxy: unified entry point for message/tts/nodes/cron/web_search and more
 - Web UI (opt-in): chat interface at `/ui` with persistence (SQLite), message folding, and settings panel
-
-![Web UI](static/Screenshot01.png)
 - Client is pure bash + jq, zero Python dependency
 
 ## Agent Compatibility Matrix
@@ -81,6 +79,7 @@ A bridge service that exposes local CLI agents (Kiro CLI, Claude Code, [OpenAI C
 
 | Version | Date | Description |
 |---------|------|-------------|
+| v0.9.1 | 2026-03-29 | README refresh: fix ASCII art arrow direction, add Web UI + direct HTTP path, remove screenshot |
 | v0.9.0 | 2026-03-28 | Adaptive Web UI: native CSS variables, dark mode, responsive layout, drop jQuery + Tailwind |
 | v0.8.4 | 2026-03-28 | Qwen Code + OpenCode agent support, test_qwen.sh, test_opencode.sh |
 | v0.8.3 | 2026-03-21 | Web UI opt-in (`--ui`), chat persistence (SQLite), message folding, settings panel |

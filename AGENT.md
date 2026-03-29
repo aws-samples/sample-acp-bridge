@@ -5,7 +5,7 @@
 ACP Bridge exposes local CLI agents (Kiro/Claude/Codex) via HTTP with async job support.
 
 ```
-CLI Agents (kiro/claude/codex) ↕ stdio JSON-RPC → ACP Bridge :18010 ↕ HTTP → OpenClaw → Discord/Feishu
+CLI Agents (kiro/claude/codex/qwen/...) ↕ stdio JSON-RPC → ACP Bridge :18010 ↕ HTTP → OpenClaw / Web UI / HTTP API
 ```
 
 ---
